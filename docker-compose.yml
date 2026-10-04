@@ -218,6 +218,35 @@ services:
       # Must match the pgvector column width on embeddings.vector
       EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1024}
 
+      # ── Text-to-Speech (article and event narration) ──
+      # "local" runs Kokoro on CPU inside the image: no API key, no per-minute
+      # billing. Set TTS_PROVIDER=openai|grok|gemini (plus that vendor's key) to
+      # upgrade to a hosted voice.
+      TTS_PROVIDER: ${TTS_PROVIDER:-local}
+      TTS_MODEL: ${TTS_MODEL:-gpt-4o-mini-tts}
+      TTS_VOICE: ${TTS_VOICE:-alloy}
+      TTS_LOCAL_VOICE: ${TTS_LOCAL_VOICE:-af_heart}
+      TTS_LOCAL_MP3_QUALITY: ${TTS_LOCAL_MP3_QUALITY:-7}
+      TTS_LOCAL_TARGET_RMS_DBFS: ${TTS_LOCAL_TARGET_RMS_DBFS:--20}
+      TTS_LOCAL_PEAK_DBFS: ${TTS_LOCAL_PEAK_DBFS:--1}
+      # ONNX Runtime would otherwise take one thread per CPU core and saturate the
+      # host during a single narration request. 0 restores the library default.
+      TTS_ONNX_THREADS: ${TTS_ONNX_THREADS:-4}
+      TTS_MAX_CONCURRENT_SYNTHESIS: ${TTS_MAX_CONCURRENT_SYNTHESIS:-1}
+      TTS_PREWARM_ENABLED: ${TTS_PREWARM_ENABLED:-true}
+      TTS_PREWARM_STARTUP_DELAY_SECONDS: ${TTS_PREWARM_STARTUP_DELAY_SECONDS:-60}
+      TTS_PREWARM_INTERVAL_SECONDS: ${TTS_PREWARM_INTERVAL_SECONDS:-900}
+      TTS_PREWARM_BATCH: ${TTS_PREWARM_BATCH:-3}
+      TTS_PREWARM_ITEM_DELAY_SECONDS: ${TTS_PREWARM_ITEM_DELAY_SECONDS:-2}
+      TTS_PREWARM_MAX_CHARS: ${TTS_PREWARM_MAX_CHARS:-6000}
+      TTS_SPEED: ${TTS_SPEED:-1.0}
+      TTS_MAX_CHARS: ${TTS_MAX_CHARS:-20000}
+      TTS_CHUNK_CHARS: ${TTS_CHUNK_CHARS:-3500}
+      TTS_STREAM_FIRST_CHUNK_CHARS: ${TTS_STREAM_FIRST_CHUNK_CHARS:-150}
+      TTS_STREAM_CHUNK_CHARS: ${TTS_STREAM_CHUNK_CHARS:-300}
+      AUDIO_URL_TTL_SECONDS: ${AUDIO_URL_TTL_SECONDS:-600}
+      TTS_CACHE_TTL_SECONDS: ${TTS_CACHE_TTL_SECONDS:-604800}
+
       # ── CORS ──
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
 

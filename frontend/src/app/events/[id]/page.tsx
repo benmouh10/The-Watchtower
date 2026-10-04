@@ -28,6 +28,7 @@ import {
   Download
 } from "lucide-react";
 import PrimaryNav from "../../components/PrimaryNav";
+import ListenButton from "../../components/ListenButton";
 import {
   getSavedEvent,
   isEventSaved,
@@ -909,6 +910,14 @@ export default function EventDetailPage() {
                   </span>
                 </button>
 
+                {/* Listen — narration of the editorial synthesis below */}
+                <ListenButton
+                  resource="events"
+                  resourceId={event.id}
+                  label="Listen"
+                  variant="pill"
+                />
+
                 {/* Save to Reading List */}
                 <button
                   onClick={openListModal}
@@ -1004,9 +1013,17 @@ export default function EventDetailPage() {
 
           {/* Synthesized Body */}
           <div className="border-b border-outline-variant/40 pb-6">
-            <h3 className="font-label-caps text-label-caps text-zinc-500 uppercase tracking-widest text-[10px] mb-4">
-              EDITORIAL SYNTHESIS REPORT
-            </h3>
+            <div className="flex items-start justify-between gap-4 mb-4">
+              <h3 className="font-label-caps text-label-caps text-zinc-500 uppercase tracking-widest text-[10px]">
+                EDITORIAL SYNTHESIS REPORT
+              </h3>
+              <ListenButton
+                resource="events"
+                resourceId={event.id}
+                label="Listen to this event"
+                className="-mt-1 shrink-0"
+              />
+            </div>
             <article className="max-w-3xl">
               {renderCitationsParagraphs(event.summary, event.articles)}
             </article>
@@ -1115,14 +1132,17 @@ export default function EventDetailPage() {
                         {art.title}
                       </h4>
                     </div>
-                    <a 
-                      href={art.url} 
-                      target="_blank" 
-                      rel="noopener noreferrer"
-                      className="text-primary hover:text-white text-xs flex items-center gap-1 font-label-caps text-[10px] uppercase mt-4 border-t border-zinc-900/60 pt-2.5 w-max"
-                    >
-                      View Source Wire <ExternalLink className="w-3 h-3" />
-                    </a>
+                    <div className="flex items-center gap-4 mt-4 border-t border-zinc-900/60 pt-2.5">
+                      <a 
+                        href={art.url} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-primary hover:text-white text-xs flex items-center gap-1 font-label-caps text-[10px] uppercase w-max"
+                      >
+                        View Source Wire <ExternalLink className="w-3 h-3" />
+                      </a>
+                      <ListenButton resource="articles" resourceId={art.id} label="Listen" />
+                    </div>
                   </div>
                 );
               })}

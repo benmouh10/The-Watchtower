@@ -3,9 +3,10 @@
 # =============================================================================
 from contextlib import asynccontextmanager
 
+import asyncio
+
 from fastapi import FastAPI, Depends, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +16,7 @@ from app.core.database import engine, get_db
 from app.core.logging import configure_logging
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.security_headers import SecurityHeadersMiddleware
+from app.middleware.selective_gzip import SelectiveGZipMiddleware
 
 # ── Controller (Router) imports ───────────────────────────────────────────────
 from app.controllers.auth_controller import router as auth_router
@@ -63,7 +65,20 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         print(f"❌ Failed to create Elasticsearch index: {exc}")
         
+    # Fill the narration cache in the background so the first press of a play
+    # button reads Redis instead of waiting on local speech synthesis.
+    from app.services.narration_warmer import narration_warmer
+    narration_warmer.start()
+
+    # Pull the speech model into memory now rather than inside somebody's first
+    # request: reading the weights costs several seconds, and the server can serve
+    # traffic while it happens.
+    from app.services.tts_service import tts_service
+    asyncio.create_task(tts_service.preload_local())
+
     yield
+    
+    await narration_warmer.stop()
     
     # Dispose releases all pooled connections back to PostgreSQL
     await engine.dispose()
@@ -105,7 +120,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.add_middleware(GZipMiddleware, minimum_size=1000)
+# Selective rather than blanket gzip: narration is a live MP3 stream, and a gzip
+# compressor holds its first bytes back until the buffer fills, which would put the
+# wait straight back that streaming removed. See middleware/selective_gzip.py.
+app.add_middleware(SelectiveGZipMiddleware, minimum_size=1000)
 # Added last so it is outermost: every response, including 429s and CORS
 # preflight replies, carries the hardening headers.
 app.add_middleware(SecurityHeadersMiddleware)

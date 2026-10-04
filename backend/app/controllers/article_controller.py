@@ -12,17 +12,26 @@ Two kinds of rows share this table:
   are only publicly readable once published; only their author (or an admin)
   may edit, publish or delete them.
 """
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Path, Query, status, Depends, BackgroundTasks, HTTPException
+from fastapi.responses import Response, StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.controllers.auth_controller import get_current_user, get_current_user_optional
+from app.controllers.auth_controller import (
+    bearer,
+    get_current_user,
+    get_current_user_optional,
+    resolve_listener,
+)
+from app.core.config import settings
 from app.core.database import get_db
 from app.entities.models import (
     Article,
@@ -33,6 +42,13 @@ from app.entities.models import (
     UserRole,
 )
 from app.services.scraper_service import ScraperService
+from app.services import audio_signing
+from app.services.tts_service import (
+    TTSUnavailable,
+    article_narration_text,
+    audio_extension,
+    tts_service,
+)
 
 router = APIRouter()
 
@@ -363,32 +379,139 @@ async def _set_publication_status(
         article.publication_status = PublicationStatus.DRAFT
 
     await db.commit()
+
+    if publish:
+        # Warm the narration in the background: nobody should wait on speech
+        # synthesis for a piece that was just published.
+        from app.services.narration_warmer import narration_warmer
+        narration_warmer.enqueue_article(article_uuid)
+
     return {
         "message": "Article published" if publish else "Article unpublished",
         **_serialize(await _load_article(db, article_uuid)),
     }
 
 
-@router.get("/{article_id}/audio", status_code=status.HTTP_501_NOT_IMPLEMENTED, summary="Get audio narration for an article")
+@router.get("/{article_id}/audio/url", summary="Mint a signed playback URL for an article")
+async def get_article_audio_url(
+    article_id: str = Path(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return a short-lived token that lets a media element stream the narration.
+
+    <audio src> cannot carry an Authorization header, so the player needs a link it
+    can load directly. The token is scoped to this article and this listener, which
+    is what lets the audio route keep enforcing draft visibility.
+    """
+    article_uuid = _parse_uuid(article_id)
+    article = await db.get(Article, article_uuid)
+    if not article:
+        raise HTTPException(status_code=404, detail="Article not found")
+    _require_audio_access(article, current_user)
+
+    minted = audio_signing.issue(
+        f"article:{article_uuid}", current_user.id, _role_of(current_user),
+        settings.AUDIO_URL_TTL_SECONDS,
+    )
+    return {"token": minted["token"], "expires_at": minted["expires_at"]}
+
+
+@router.get("/{article_id}/audio", summary="Get audio narration for an article")
 async def get_article_audio(
     article_id: str = Path(...),
     db: AsyncSession = Depends(get_db),
+    sig: Optional[str] = Query(
+        None, description="Signed playback token; alternative to the Authorization header"
+    ),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer),
 ):
-    """
-    Not implemented.
+    """Stream an audio narration of the article body.
 
-    Previously answered 200 "Audio generation placeholder". A 200 for a
-    non-existent audio file is worse than a clear failure: players treat it as
-    a valid stream and report silence rather than an error.
+    Requires an account, presented either as a bearer token or as the signed token
+    from /audio/url. Each result is cached by content hash, meaning an unchanged
+    article is narrated once per TTL rather than on every play.
+
+    MP3 is sent as a stream so playback starts on the first chunk instead of after
+    the whole recording. Fails with 501 while no speech provider is configured, and
+    502 when the provider is configured but cannot deliver audio; the first chunk is
+    synthesised before the response starts so a provider failure is still reported
+    as a status code rather than a truncated file.
     """
     article_uuid = _parse_uuid(article_id)
-    if not await db.get(Article, article_uuid):
+    article = await db.get(Article, article_uuid)
+    if not article:
         raise HTTPException(status_code=404, detail="Article not found")
 
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Text-to-speech is not implemented: no audio pipeline is configured.",
+    listener = await resolve_listener(f"article:{article_uuid}", sig, credentials, db)
+    _require_audio_access(article, listener)
+
+    if not tts_service.configured:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Text-to-speech is not configured: set TTS_PROVIDER and its API key.",
+        )
+
+    return await _stream_narration(
+        tts_service, article_narration_text(article), article.title or "article"
     )
+
+
+def _require_audio_access(article, listener) -> None:
+    """Same visibility rule as GET /articles/{id}, for either caller shape.
+
+    An unpublished draft stays readable only by its author and admins; anyone else
+    gets a 404 rather than a hint that the draft exists.
+    """
+    if (
+        article.origin == ArticleOrigin.AUTHORED
+        and article.publication_status == PublicationStatus.DRAFT
+    ):
+        is_owner = article.author_id == listener.id
+        is_admin = _role_of(listener) == UserRole.ADMIN.value
+        if not (is_owner or is_admin):
+            raise HTTPException(status_code=404, detail="Article not found")
+
+
+async def _stream_narration(service, text: str, title: str):
+    """Answer with a progressively streamed recording, or a buffered one.
+
+    Streaming is what removes the wait: the first chunk is synthesised before the
+    response headers go out, so a provider failure still surfaces as 502, and the
+    rest arrives while the clip is already playing.
+    """
+    stem = re.sub(r"[^a-zA-Z0-9]+", "-", title).strip("-").lower()[:60]
+    headers = {
+        "Cache-Control": "private, max-age=3600",
+        "Content-Disposition": f'inline; filename="{stem or "narration"}.mp3"',
+    }
+
+    if not service.streams_progressively:
+        try:
+            audio, media_type = await service.narrate(text)
+        except TTSUnavailable as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        headers["Content-Disposition"] = (
+            f'inline; filename="{stem or "narration"}{audio_extension(media_type)}"'
+        )
+        return Response(content=audio, media_type=media_type, headers=headers)
+
+    stream = service.iter_audio(text)
+    try:
+        first_chunk = await anext(stream)
+    except TTSUnavailable as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except StopAsyncIteration:
+        # Headers are not out yet, so this can still be reported honestly.
+        await stream.aclose()
+        raise HTTPException(status_code=502, detail="Speech synthesis produced no audio")
+
+    async def body():
+        yield first_chunk
+        async for part in stream:
+            yield part
+
+    return StreamingResponse(body(), media_type="audio/mpeg", headers=headers)
 
 
 @router.post("/sync", status_code=status.HTTP_202_ACCEPTED, summary="Trigger RSS & Playwright scraping sync pipeline (Admin)")

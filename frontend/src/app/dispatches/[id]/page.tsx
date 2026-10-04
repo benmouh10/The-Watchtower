@@ -16,6 +16,7 @@ import {
   User,
 } from "lucide-react";
 import PrimaryNav from "../../components/PrimaryNav";
+import ListenButton from "../../components/ListenButton";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const API = `${API_BASE_URL}/api/v1`;
@@ -266,11 +267,12 @@ export default function DispatchDetailPage() {
                   href={article.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-[10px] text-cyber-cyan hover:text-cyber-cyan/80 font-mono-data uppercase tracking-wider ml-auto transition-colors"
+                  className="inline-flex items-center gap-1 text-[10px] text-cyber-cyan hover:text-cyber-cyan/80 font-mono-data uppercase tracking-wider transition-colors"
                 >
                   <ExternalLink className="w-3.5 h-3.5" /> View Source
                 </a>
               )}
+              <ListenButton resource="articles" resourceId={article.id} label="Listen to this dispatch" className="ml-auto" />
             </div>
 
             <div className="mt-6 text-zinc-200 text-[15px] leading-relaxed whitespace-pre-wrap">

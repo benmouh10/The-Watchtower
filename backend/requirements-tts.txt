@@ -1,0 +1,13 @@
+# =============================================================================
+# GlobeLens AI — optional local text-to-speech stack
+# =============================================================================
+# Kept out of requirements.txt on purpose: these pull in an ONNX runtime and a
+# ~325 MB model, which unit tests and CI do not need (the local provider is
+# exercised with a fake engine). Only the Docker images install this file.
+#
+# Kokoro-82M v1.0 is Apache-2.0, runs on CPU, and publishes aarch64 wheels, so
+# the same image works on x86_64 hosts and Oracle's Ampere A1.
+# =============================================================================
+kokoro-onnx==0.6.1
+onnxruntime==1.30.0
+lameenc==1.8.4

@@ -69,6 +69,29 @@ RUN pip install --upgrade pip && \
     playwright install chromium && \
     chmod -R 777 /ms-playwright
 
+# Local (free, offline) text-to-speech. Split from the layer above so editing
+# ML dependencies does not invalidate the Playwright download, and so images
+# built without narration can drop this stage.
+ARG KOKORO_MODEL_VERSION=model-files-v1.0
+ARG KOKORO_MODEL_SHA256=7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5
+ARG KOKORO_VOICES_SHA256=bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d
+ENV TTS_LOCAL_MODEL_PATH=/app/models/tts/kokoro-v1.0.onnx \
+    TTS_LOCAL_VOICES_PATH=/app/models/tts/voices-v1.0.bin
+
+COPY requirements-tts.txt .
+RUN pip install --no-cache-dir -r requirements-tts.txt
+
+# The model is fetched once at build time and verified, so a deployment never
+# depends on GitHub being reachable at boot. Swap TTS_LOCAL_MODEL_PATH for the
+# fp16 or int8 build to trade quality for size and speed.
+RUN mkdir -p /app/models/tts && \
+    curl -fsSL --retry 3 --max-time 1800 -o /app/models/tts/kokoro-v1.0.onnx \
+      "https://github.com/thewh1teagle/kokoro-onnx/releases/download/${KOKORO_MODEL_VERSION}/kokoro-v1.0.onnx" && \
+    curl -fsSL --retry 3 --max-time 600 -o /app/models/tts/voices-v1.0.bin \
+      "https://github.com/thewh1teagle/kokoro-onnx/releases/download/${KOKORO_MODEL_VERSION}/voices-v1.0.bin" && \
+    echo "${KOKORO_MODEL_SHA256}  /app/models/tts/kokoro-v1.0.onnx" | sha256sum -c - && \
+    echo "${KOKORO_VOICES_SHA256}  /app/models/tts/voices-v1.0.bin" | sha256sum -c -
+
 # Copy Alembic migration files
 COPY alembic.ini .
 COPY alembic ./alembic

@@ -6,10 +6,19 @@ POST /events/{id}/follow
 """
 from fastapi import APIRouter, Path, Query, Depends, HTTPException, status
 from typing import Optional
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.rbac import require_role
-from app.entities.models import UserRole
+from app.controllers.auth_controller import bearer, get_current_user, resolve_listener
+from app.entities.models import Event, User, UserRole
+from app.services import audio_signing
+
+
+def _role_of(user) -> str:
+    """Role as a plain string, for whichever caller shape reached the route."""
+    return user.role.value if hasattr(user.role, "value") else user.role
 
 router = APIRouter()
 
@@ -338,6 +347,88 @@ async def get_event(
         "contradictions": contradictions,
         "articles": articles_list
     }
+
+
+@router.get("/{event_id}/audio/url", summary="Mint a signed playback URL for an event briefing")
+async def get_event_audio_url(
+    event_id: str = Path(..., description="Event UUID"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return a short-lived token that lets a media element stream the briefing.
+
+    <audio src> cannot carry an Authorization header, so the player needs a link it
+    can load directly; the token is scoped to this event and this listener.
+    """
+    from sqlalchemy import select
+    import uuid
+
+    from app.services.tts_service import tts_service  # noqa: F401
+
+    try:
+        event_uuid = uuid.UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid event UUID format")
+
+    exists = await db.scalar(select(Event.id).where(Event.id == event_uuid))
+    if exists is None:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    minted = audio_signing.issue(
+        f"event:{event_uuid}", current_user.id, _role_of(current_user),
+        settings.AUDIO_URL_TTL_SECONDS,
+    )
+    return {"token": minted["token"], "expires_at": minted["expires_at"]}
+
+
+@router.get("/{event_id}/audio", summary="Get audio narration of an event synthesis")
+async def get_event_audio(
+    event_id: str = Path(..., description="Event UUID"),
+    db: AsyncSession = Depends(get_db),
+    sig: Optional[str] = Query(
+        None, description="Signed playback token; alternative to the Authorization header"
+    ),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer),
+):
+    """Stream an MP3 reading of the event's editorial synthesis.
+
+    This is the copy a listener actually wants: the reconciled summary, not the
+    full text of every wire behind it. Requires an account, presented either as a
+    bearer token or as the signed token from /audio/url; the result is cached by
+    content hash, so replaying the same event costs nothing.
+
+    The recording is streamed so playback starts on the first chunk rather than
+    after the whole briefing has been synthesised.
+    """
+    from sqlalchemy import select
+    from app.services.tts_service import event_narration_text, tts_service
+    from app.controllers.article_controller import _stream_narration
+    import uuid
+
+    try:
+        event_uuid = uuid.UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid event UUID format")
+
+    summary = await db.scalar(
+        select(Event.summary).where(Event.id == event_uuid)
+    )
+    if summary is None:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    title = await db.scalar(select(Event.title).where(Event.id == event_uuid)) or "Event briefing"
+
+    await resolve_listener(f"event:{event_uuid}", sig, credentials, db)
+
+    if not tts_service.configured:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Text-to-speech is not configured: set TTS_PROVIDER and its API key.",
+        )
+
+    return await _stream_narration(
+        tts_service, event_narration_text(title, summary), title
+    )
 
 
 @router.get("/{event_id}/related", summary="Get related events for timeline")

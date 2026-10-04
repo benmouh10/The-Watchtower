@@ -22,11 +22,54 @@ from app.schemas.user import (
     UserResponse,
     TokenResponse
 )
+from app.services import audio_signing
 from app.services.auth_service import AuthService
 from app.services.cache_service import cache_service
 
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
+# Same scheme instance, exported so routes that accept either a bearer token or a
+# signed playback URL can resolve both without declaring the scheme twice.
+bearer = security
+
+
+class PlaybackListener:
+    """Identity carried by a signed playback URL instead of a bearer token.
+
+    A media element cannot send an Authorization header, so the narration routes
+    also accept a short-lived signed link. The fields mirror the ones those routes
+    read off a User, so the visibility rules stay identical either way.
+    """
+
+    __slots__ = ("id", "role")
+
+    def __init__(self, user_id: uuid.UUID, role: str) -> None:
+        self.id = user_id
+        self.role = role
+
+
+async def resolve_listener(
+    resource: str,
+    sig: Optional[str],
+    credentials: Optional[HTTPAuthorizationCredentials],
+    db: AsyncSession,
+):
+    """Return who is asking for `resource`, from a signed URL or a bearer token.
+
+    `resource` is scoped by the route ("article:<uuid>"), so a link minted for one
+    briefing cannot be edited to fetch another. A signature that fails verification
+    is rejected outright rather than quietly falling back to anonymous access.
+    """
+    if sig:
+        verified = audio_signing.verify(resource, sig)
+        if verified is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Playback link is invalid or has expired",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return PlaybackListener(verified["user_id"], verified["role"])
+    return await get_current_user(credentials, db)
 
 
 # ── Dependency for fetching current authenticated user ─────────────────────────

@@ -34,7 +34,8 @@ GUEST_ALLOWED = {
     ("GET", "/api/v1/articles/authored"),
     ("GET", "/api/v1/articles/{article_id}"),
     ("GET", "/api/v1/articles/{article_id}/comments"),
-    ("GET", "/api/v1/articles/{article_id}/audio"),
+    # GET /api/v1/articles/{article_id}/audio is deliberately absent: speech
+    # synthesis is billed per call, so narration requires an account.
     ("GET", "/api/v1/search/query"),
     ("GET", "/api/v1/search/autocomplete"),
     ("POST", "/api/v1/newsletter/subscribe"),
@@ -85,3 +86,14 @@ def test_every_route_is_gated_or_explicitly_guest():
         "GUEST_ALLOWED entries that are actually gated or no longer exist: "
         f"{sorted(stale)}"
     )
+
+
+def test_narration_is_never_public():
+    """Playback costs CPU per call, so no narration route may skip authentication.
+
+    Worth stating separately from the allowlist above: a signed playback URL is only
+    as private as the route that mints it, so both halves have to stay gated.
+    """
+    reachable = _anonymous_reachable_routes()
+    exposed = sorted(path for _, path in reachable if path.endswith("/audio") or path.endswith("/audio/url"))
+    assert not exposed, f"narration routes became anonymous: {exposed}"

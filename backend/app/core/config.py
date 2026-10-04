@@ -98,6 +98,79 @@ class Settings(BaseSettings):
     # 1536 = text-embedding-3-small, 1024 = bge-m3, 768 = nomic-embed-text.
     EMBEDDING_DIMENSIONS: int = 1536
 
+    # ── Text-to-Speech (article narration) ─────────────────────────────────────
+    # Feeds GET /articles/{id}/audio and GET /events/{id}/audio.
+    #
+    # "local" is the default and costs nothing: Kokoro-82M runs on CPU inside this
+    # image, so narration works with no API key and no per-minute billing. The
+    # hosted providers stay available as upgrades: "openai" and "grok" speak
+    # through an OpenAI-compatible /audio/speech endpoint, "gemini" uses the
+    # Generative Language TTS endpoint. An unsupported or credential-less provider
+    # makes the route answer 501 rather than failing opaquely.
+    TTS_PROVIDER: str = "local"                # "local" | "openai" | "grok" | "gemini"
+    TTS_MODEL: str = "gpt-4o-mini-tts"
+    TTS_VOICE: str = "alloy"                   # OpenAI voice; Gemini prebuilt names also accepted
+    TTS_SPEED: float = 1.0
+    # Local engine files, baked into the image by the Dockerfile and overridable so
+    # the fp16/int8 Kokoro builds can be dropped in without a rebuild.
+    TTS_LOCAL_MODEL_PATH: str = "/app/models/tts/kokoro-v1.0.onnx"
+    TTS_LOCAL_VOICES_PATH: str = "/app/models/tts/voices-v1.0.bin"
+    TTS_LOCAL_VOICE: str = "af_heart"          # any Kokoro voice id, e.g. am_michael
+    # LAME quality for the locally encoded MP3: 2 = best/slowest, 7 = near-best.
+    # lameenc picks the bitrate from this (128-160 kbps at Kokoro's 24 kHz mono,
+    # which is transparent for speech), so there is no bitrate knob to set.
+    TTS_LOCAL_MP3_QUALITY: int = 7
+    # Kokoro's raw output sits around -22 dBFS RMS, which reads as quiet on phone
+    # and laptop speakers. Audio is scaled toward the target RMS and then capped at
+    # the peak ceiling so normalisation can never introduce clipping.
+    TTS_LOCAL_TARGET_RMS_DBFS: float = -20.0
+    TTS_LOCAL_PEAK_DBFS: float = -1.0
+    # Local synthesis runs at roughly half real time on CPU, so a cold article would
+    # make the listener wait as long as the clip is long. The warmer walks recent
+    # articles and events in the background and fills the Redis cache ahead of the
+    # first press of Listen, one item at a time so it never starves live requests.
+    TTS_PREWARM_ENABLED: bool = True
+    TTS_PREWARM_STARTUP_DELAY_SECONDS: float = 60.0   # let boot and health checks settle
+    TTS_PREWARM_INTERVAL_SECONDS: float = 900.0       # sweep cadence for missed items
+    TTS_PREWARM_BATCH: int = 3                        # articles + events per sweep
+    TTS_PREWARM_ITEM_DELAY_SECONDS: float = 2.0       # pause between items
+    # A 20,000-character article takes over two minutes of CPU to narrate, which on a
+    # small host would starve live requests. Anything longer than this is left cold:
+    # the play button still synthesises it on demand, it just is not warmed ahead.
+    TTS_PREWARM_MAX_CHARS: int = 6000
+    # A single OpenAI speech request accepts at most 4,000 characters, so longer
+    # articles are split on paragraph/sentence boundaries and the audio chunks are
+    # concatenated. TTS_MAX_CHARS bounds how long one play button can run.
+    TTS_MAX_CHARS: int = 20000
+    TTS_CHUNK_CHARS: int = 3500
+    # ONNX Runtime threads for local speech. kokoro_onnx opens its session with no
+    # options, which would otherwise give it one intra-op thread per logical CPU and
+    # let a single sentence of narration saturate the whole machine. The graph is
+    # memory bound, so a small pool is nearly as fast and leaves the database, search
+    # and web tiers on the same host responsive. 0 would leave the default in place.
+    TTS_ONNX_THREADS: int = 4
+    # How many clips may be synthesised at the same time. onnxruntime hands every
+    # concurrent run its own threads, so this multiplies the ceiling above: 1 keeps
+    # the service on TTS_ONNX_THREADS cores no matter how many listeners arrive.
+    TTS_MAX_CONCURRENT_SYNTHESIS: int = 1
+    # Chunk sizes used when narration is streamed to the player, far below
+    # TTS_CHUNK_CHARS on purpose. Playback drains the buffer at 1x while synthesis
+    # refills it at a fairly fixed 32 characters per second, so the buffer sawtooths:
+    # each chunk's audio has to cover the wall time of the next chunk. A large chunk
+    # therefore risks a long silence, and measured on this model 800 characters took
+    # ~22s to build against ~25s of audio, which stalls repeatedly. Smaller chunks
+    # cost a little extra per-call overhead and bound the worst gap to a few seconds;
+    # once the buffer is ahead it only grows.
+    # The first chunk also sets the wait before any sound, so it stays small; it is
+    # deliberately a little larger than nothing so the opening covers the first refill.
+    TTS_STREAM_FIRST_CHUNK_CHARS: int = 150
+    TTS_STREAM_CHUNK_CHARS: int = 300
+    # Lifetime of a signed playback URL (see services/audio_signing).
+    AUDIO_URL_TTL_SECONDS: int = 600
+    # Narration is cached in Redis under a hash of provider + model + voice +
+    # text, so an article is synthesised once per TTL instead of on every play.
+    TTS_CACHE_TTL_SECONDS: int = 604800        # 7 days
+
     # ── CORS ──────────────────────────────────────────────────────────────
     # Accepts a comma-separated string OR a JSON array string from the env:
     #   CORS_ORIGINS=http://localhost:3000          (bare string)
