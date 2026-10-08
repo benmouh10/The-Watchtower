@@ -5,7 +5,7 @@ PUT  /admin/users/{id}/role | /admin/users/{id}/block | /admin/articles/{id}/hid
 DELETE /admin/users/{id} | /admin/comments/{id}
 POST /admin/events/promote | /admin/sources
 """
-from fastapi import APIRouter, Path, status, Depends, BackgroundTasks, HTTPException
+from fastapi import APIRouter, Path, status, Depends, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from typing import Optional
 
@@ -13,11 +13,12 @@ from app.controllers.auth_controller import get_current_user
 from app.core.config import settings
 from app.core.passwords import validate_password_strength
 from app.core.rbac import require_role
-from app.entities.models import User, UserRole
+from app.entities.models import User, UserRole, BlockedIp, BlockSource
 from app.services.embedding_service import EmbeddingService
 from app.services.clustering_service import ClusteringService
 from app.core.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.services import threat_lens as tl
 
 # Admin-only tier. The hierarchy lives in app.core.rbac so every controller
 # speaks the same role vocabulary; the name is kept for existing importers
@@ -61,6 +62,13 @@ class PromoteEventRequest(BaseModel):
     event_id: str
 
 
+class ManualBlockRequest(BaseModel):
+    """Operator-issued block for an identity the model never flagged."""
+
+    ip: str = Field(..., min_length=1, max_length=45)
+    reason: Optional[str] = Field(default=None, max_length=255)
+
+
 def _parse_uuid(raw: str, label: str):
     """Path segments are strings; a malformed id must not become a 500."""
     import uuid as _uuid
@@ -69,6 +77,16 @@ def _parse_uuid(raw: str, label: str):
         return _uuid.UUID(raw)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid {label} UUID")
+
+
+def _validate_ip(identity: str) -> str:
+    """An identity fed to the blocklist must be a real IP address."""
+    import ipaddress
+
+    try:
+        return str(ipaddress.ip_address(identity.strip()))
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid IP address: {identity}")
 
 
 @router.get("/dashboard", summary="Admin dashboard overview (ADMIN)")
@@ -625,4 +643,115 @@ async def sync_search_index(
     search_service = SearchService()
     background_tasks.add_task(search_service.sync_all_processed_events)
     return {"status": "search_sync_initiated"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Threat Lens (S5 sprint 1) — blocked identity ops
+# ─────────────────────────────────────────────────────────────────────────────
+# The Threat Lens worker blocks by writing a Redis marker the middleware reads
+# on every request. These admin routes are the self-serve escape hatch: list
+# what is blocked (marker state + durable row), issue a MANUAL block, and revoke
+# a block without touching Redis directly. Guarded by the router-level
+# require_admin dependency like every other endpoint here.
+
+@router.get("/threat/blocks", summary="List Threat Lens blocks (ADMIN)")
+async def list_threat_blocks(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Durable blocked_ips rows, newest first, enriched with the live enforcement
+    state (whether a Redis marker is 403-ing that identity right now), plus the
+    most recent block-feed entries for the ops view.
+    """
+    from sqlalchemy import select
+
+    result = await db.execute(
+        select(BlockedIp).order_by(BlockedIp.blocked_at.desc()).offset(offset).limit(limit)
+    )
+    rows = result.scalars().all()
+
+    active_flags = {}
+    if rows:
+        try:
+            from app.services.cache_service import cache_service
+
+            client = await cache_service._get_client()
+            keys = [
+                f"{settings.THREAT_LENS_BLOCKLIST_KEY_PREFIX}:{b.ip}" for b in rows
+            ]
+            values = await client.mget(*keys)
+            active_flags = {b.ip: bool(v) for b, v in zip(rows, values)}
+        except Exception:
+            pass  # fail-open: flags stay False rather than 500ing the admin panel
+
+    return {
+        "count": len(rows),
+        "blocks": [
+            {
+                "ip": b.ip,
+                "source": b.source,
+                "reason": b.reason,
+                "risk_score": round(b.risk_score, 4) if b.risk_score is not None else None,
+                "blocked_at": b.blocked_at.isoformat() if b.blocked_at else None,
+                "expires_at": b.expires_at.isoformat() if b.expires_at else None,
+                "active": active_flags.get(b.ip, False),
+            }
+            for b in rows
+        ],
+        "recent_feed": await tl.recent_blocks(limit),
+    }
+
+
+@router.post("/threat/blocks", status_code=status.HTTP_201_CREATED, summary="Manually block an identity (ADMIN)")
+async def manual_threat_block(payload: ManualBlockRequest):
+    """
+    Operator-issued block for an identity the model never flagged. Writes the
+    middleware's Redis marker and a MANUAL blocked_ips row (and a feed entry),
+    so it is indistinguishable from a model block to the enforcement path.
+    """
+    identity = _validate_ip(payload.ip)
+    reason = payload.reason or "manual_block_by_admin"
+    await tl.block_identity(identity, reason)
+    await tl.persist_block(identity, reason, risk=1.0, source=BlockSource.MANUAL.value)
+    return {
+        "message": "Block issued",
+        "ip": identity,
+        "source": BlockSource.MANUAL.value,
+        "reason": reason,
+    }
+
+
+@router.post("/threat/blocks/{ip}/unblock", summary="Revoke a block (ADMIN)")
+async def unblock_threat_ip(
+    ip: str = Path(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Lift a block: clear the Redis enforcement marker + scoring window and delete
+    the durable blocked_ips row. History lives on in the Redis feed. 404 when
+    neither a record nor a marker exists for the identity.
+    """
+    from sqlalchemy import select
+
+    identity = _validate_ip(ip)
+    row = (
+        await db.execute(select(BlockedIp).where(BlockedIp.ip == identity))
+    ).scalars().first()
+
+    cleared_enforcement = await tl.unblock_identity(identity)
+    cleared_record = False
+    if row is not None:
+        cleared_record = await tl.delete_blocked_ip(identity)
+
+    if row is None and not cleared_enforcement:
+        raise HTTPException(status_code=404, detail=f"No block found for {identity}")
+
+    return {
+        "message": "Block revoked",
+        "ip": identity,
+        "cleared_enforcement": cleared_enforcement,
+        "cleared_record": cleared_record,
+    }
 

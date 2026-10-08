@@ -70,11 +70,11 @@ def noop_side_effects(monkeypatch):
     async def _block(identity, reason):
         block_calls.append((identity, reason))
 
-    async def _record(identity, reason, risk):
+    async def _persist(identity, reason, risk, source="THREAT_LENS"):
         pass
 
     monkeypatch.setattr(tl, "block_identity", _block)
-    monkeypatch.setattr(threat_tasks, "_record_block", _record)
+    monkeypatch.setattr(tl, "persist_block", _persist)
     return block_calls
 
 

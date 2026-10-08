@@ -16,6 +16,9 @@ class FakeRedis:
     async def get(self, key):
         return self.store.get(key)
 
+    async def mget(self, *keys):
+        return [self.store.get(key) for key in keys]
+
     async def set(self, key, value, ex=None):
         self.store[key] = value
         return True
@@ -38,6 +41,10 @@ class FakeRedis:
 
     async def rpush(self, key, value):
         self.store.setdefault(key, []).append(value)
+        return len(self.store[key])
+
+    async def lpush(self, key, value):
+        self.store.setdefault(key, []).insert(0, value)
         return len(self.store[key])
 
     async def ltrim(self, key, start, stop):

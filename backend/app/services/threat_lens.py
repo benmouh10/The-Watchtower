@@ -153,13 +153,102 @@ async def block_identity(identity: str, reason: str) -> None:
         pass
 
 
-async def unblock_identity(identity: str) -> None:
-    """Clear a block marker (admin/ops escape hatch)."""
+async def unblock_identity(identity: str) -> bool:
+    """Lift a block and its scoring state. Returns True when anything was cleared.
+
+    Removes the middleware's 403 marker, the rolling anomaly window (so a
+    forgiven identity does not trip the threshold instantly on the next hiccup),
+    and the current rate bucket. The durable blocked_ips row is NOT touched
+    here — revoking that record is the admin route's job. Fail-open: False.
+    """
     try:
         client = await cache_service._get_client()
-        await client.delete(f"{settings.THREAT_LENS_BLOCKLIST_KEY_PREFIX}:{identity}")
+        keys = [
+            f"{settings.THREAT_LENS_BLOCKLIST_KEY_PREFIX}:{identity}",
+            f"threat:window:{identity}",
+            window_key(identity, int(time.time()), settings.THREAT_LENS_RATE_WINDOW_SECONDS),
+        ]
+        return bool(await client.delete(*keys))
+    except Exception:
+        return False
+
+
+async def persist_block(
+    identity: str,
+    reason: str,
+    risk: float,
+    source: str = "THREAT_LENS",
+) -> None:
+    """Upsert the durable blocked_ips row for a block decision.
+
+    Used by both the threat worker and the admin manual-block route. The Redis
+    marker enforces the 403; this row is the audit record. Errors are swallowed —
+    a persistence hiccup must not fail the task's enforcement side.
+    ``source`` mirrors BlockSource's values ("THREAT_LENS" / "MANUAL") without
+    importing the ORM into this service module's import chain.
+    """
+    try:
+        from sqlalchemy import func
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+        from app.core.database import AsyncSessionFactory
+        from app.entities.models import BlockedIp
+
+        expires_at = datetime.now(timezone.utc) + timedelta(
+            seconds=settings.THREAT_LENS_BLOCK_TTL_SECONDS
+        )
+        stmt = pg_insert(BlockedIp).values(
+            ip=identity,
+            source=source,
+            reason=reason,
+            risk_score=risk,
+            expires_at=expires_at,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[BlockedIp.ip],
+            set_={
+                "source": stmt.excluded.source,
+                "reason": stmt.excluded.reason,
+                "risk_score": stmt.excluded.risk_score,
+                "expires_at": stmt.excluded.expires_at,
+                "blocked_at": func.now(),
+            },
+        )
+        async with AsyncSessionFactory() as db:
+            await db.execute(stmt)
+            await db.commit()
     except Exception:
         pass
+
+
+async def delete_blocked_ip(identity: str) -> bool:
+    """Delete the durable record for an identity. Fail-open: False on error."""
+    try:
+        from sqlalchemy import delete
+        from app.core.database import AsyncSessionFactory
+        from app.entities.models import BlockedIp
+
+        async with AsyncSessionFactory() as db:
+            result = await db.execute(delete(BlockedIp).where(BlockedIp.ip == identity))
+            await db.commit()
+            return int(result.rowcount or 0) > 0
+    except Exception:
+        return False
+
+
+async def recent_blocks(limit: int = 50) -> list[dict]:
+    """Most recent block feed entries, newest first. Fail-open: empty list."""
+    try:
+        client = await cache_service._get_client()
+        raw = await client.lrange(settings.THREAT_LENS_BLOCKS_FEED_KEY, 0, max(0, limit - 1))
+    except Exception:
+        return []
+
+    entries = []
+    for item in raw or []:
+        parts = str(item).split("|", 2)
+        if len(parts) == 3:
+            entries.append({"ts": parts[0], "ip": parts[1], "reason": parts[2]})
+    return entries
 
 
 def window_key(identity: str, now: int, window_seconds: int) -> str:
