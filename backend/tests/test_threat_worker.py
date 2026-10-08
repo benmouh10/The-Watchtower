@@ -148,3 +148,45 @@ class TestFailOpen:
         result = analyze_telemetry_task(dict(ATTACK))
         assert result["skipped"] is True
         assert result["reason"] == "scoring_error"
+
+
+class TestPersistBlock:
+    """The REAL persist_block against a faked session factory.
+
+    The admin route tests monkeypatch persist_block entirely, so this class is
+    the only guard that the function actually executes a block-row upsert and
+    commits it. A NameError/import slip inside the function would surface here
+    as 'execute never called' (the function fails before reaching the session).
+    """
+
+    class _FakeSession:
+        def __init__(self):
+            self.executed = []
+            self.commits = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def execute(self, stmt):
+            self.executed.append(stmt)
+
+        async def commit(self):
+            self.commits += 1
+
+    @pytest.mark.asyncio
+    async def test_persist_block_executes_upsert_and_commits(self, monkeypatch):
+        from app.core import database as dbmod
+
+        session = TestPersistBlock._FakeSession()
+
+        def _factory():
+            return session
+
+        monkeypatch.setattr(dbmod, "AsyncSessionFactory", _factory)
+        await tl.persist_block("203.0.113.200", "manual_block_by_admin", 1.0, "MANUAL")
+        assert len(session.executed) == 1
+        assert session.commits == 1
+        assert "INSERT INTO blocked_ips" in str(session.executed[0])

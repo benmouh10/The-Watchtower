@@ -161,7 +161,7 @@ scores, so the model never needs real abuse samples.
 | Scoring | Celery task `app.worker.threat_tasks.analyze_telemetry_task`, consumed by the dedicated autoscaling `threat` compose service (main worker stays on the default queue) |
 | Features + model | `backend/shared_core` (`features.py`, `threat_model.py`, `AnomalyDetector`) |
 | Block state | Redis markers `threat:blocked:{ip}` (403 enforcement, TTL), `threat:window:{ip}` (anomaly window), `threat:blocks` feed; durable audit row in `blocked_ips` |
-| Scoring sidecar | `threat` service exposes `GET :9000/health` and `GET :9000/score` (body `{n_header, no_user_agent, unusual_method, request_rate, body_size_bytes}`) for live model verification |
+| Scoring sidecar | `threat` service exposes `GET :9000/health` and `POST :9000/score` with body `{"telemetry": {<TelemetryEvent fields>}}` (`method`, `path`, `header_count`, `header_entropy`, `user_agent_present`, `user_agent_length`, `payload_bytes`, `content_type_is_json`, `has_authorization`, `has_forwarded`, `path_depth`, `is_api_path`, `time_of_day`, `endpoint_sensitivity`, `status` — the rest default) for live model verification |
 
 ### Behavior
 

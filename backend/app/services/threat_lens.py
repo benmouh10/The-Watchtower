@@ -12,7 +12,9 @@ missing block marker (or a Redis blip) must mean "allow through".
 """
 from __future__ import annotations
 
+import logging
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from starlette.requests import Request
@@ -21,6 +23,8 @@ from app.core.config import settings
 from app.services.cache_service import cache_service
 from shared_core.features import shannon_entropy
 from shared_core.telemetry import TelemetryEvent
+
+logger = logging.getLogger(__name__)
 
 # Endpoints that are honey for credential theft / stuffing, scored 1.0 so the
 # model sees them as sensitive regardless of Redis state.
@@ -217,7 +221,9 @@ async def persist_block(
             await db.execute(stmt)
             await db.commit()
     except Exception:
-        pass
+        logger.exception(
+            "Threat Lens block row persistence failed; enforcement state kept in Redis"
+        )
 
 
 async def delete_blocked_ip(identity: str) -> bool:
@@ -232,6 +238,7 @@ async def delete_blocked_ip(identity: str) -> bool:
             await db.commit()
             return int(result.rowcount or 0) > 0
     except Exception:
+        logger.exception("Threat Lens block row deletion failed for %s", identity)
         return False
 
 
