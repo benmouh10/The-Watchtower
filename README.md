@@ -170,6 +170,10 @@ scores, so the model never needs real abuse samples.
 - **No single-request lock-outs.** An identity needs `THREAT_LENS_WINDOW_MIN_ANOMALIES`
   anomalies within `THREAT_LENS_WINDOW_SIZE` events before the marker is written; a
   noisy legit request can never ban a real user.
+- **Private/dev peers are watched, never locked out.** Loopback and RFC 1918 identities
+  (localhost, the Docker bridge — i.e. the operator's own traffic) are scored and
+  recorded on the block feed but never get a 403 marker (`THREAT_LENS_SKIP_PRIVATE_PEERS`,
+  on by default). TEST-NET documentation ranges stay blockable so demos work.
 - **Block lifecycle.** The worker writes marker + feed entry + `blocked_ips` row
   (reason `anomalous_x{count}_risk_{r}`). Unblocking clears all of it; the feed entry
   survives as history.
@@ -211,6 +215,7 @@ on `:9000/health` without a restart).
 | `THREAT_LENS_WINDOW_SIZE` | `5` | rolling window of scored events per identity |
 | `THREAT_LENS_BLOCK_TTL_SECONDS` | `3600` | block marker / audit expiry |
 | `THREAT_LENS_RATE_WINDOW_SECONDS` | `60` | window over which `request_rate` is measured |
+| `THREAT_LENS_SKIP_PRIVATE_PEERS` | `true` | never 403 loopback/private-range identities (dev safety) |
 | `THREAT_SCORE_PORT` | `9000` | sidecar port (compose) |
 
 > **Worker registration caveat.** `app/worker/celery_app.py` imports

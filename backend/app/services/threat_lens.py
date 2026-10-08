@@ -12,6 +12,7 @@ missing block marker (or a Redis blip) must mean "allow through".
 """
 from __future__ import annotations
 
+import ipaddress
 import logging
 import time
 from datetime import datetime, timedelta, timezone
@@ -25,6 +26,14 @@ from shared_core.features import shannon_entropy
 from shared_core.telemetry import TelemetryEvent
 
 logger = logging.getLogger(__name__)
+
+# Identities that never get a 403 marker: local dev traffic. Explicit RFC 1918
+# + loopback rather than ip.is_private (which also covers the documentation
+# ranges 198.51.100.0/24 / 203.0.113.0/24 we WANT to keep blockable for demos).
+_PRIVATE_NETWORKS = tuple(
+    ipaddress.ip_network(net, strict=False)
+    for net in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8")
+)
 
 # Endpoints that are honey for credential theft / stuffing, scored 1.0 so the
 # model sees them as sensitive regardless of Redis state.
@@ -65,6 +74,23 @@ def endpoint_sensitivity(path: str) -> float:
     if path.startswith("/api/v1/"):
         return 0.5
     return 0.0
+
+
+def is_private_identity(identity: str) -> bool:
+    """True for loopback / private-range addresses (RFC 1918, 172.16-31, …).
+
+    Local dev traffic (the Docker bridge, localhost) must never be blockable —
+    the operator shouldn't be able to lock themselves out of their own stack.
+    TEST-NET ranges (198.51.100.0/24 …) intentionally stay blockable so e2e
+    demos and tests keep working.
+    """
+    try:
+        ip = ipaddress.ip_address(str(identity))
+    except ValueError:
+        return False
+    if ip.version != 4:
+        return ip.is_loopback
+    return any(ip in net for net in _PRIVATE_NETWORKS) or ip.is_loopback
 
 
 def build_telemetry(request: Request, status_code: int) -> TelemetryEvent:
@@ -135,20 +161,24 @@ async def is_identity_blocked(identity: str) -> bool:
         return False
 
 
-async def block_identity(identity: str, reason: str) -> None:
+async def block_identity(identity: str, reason: str, enforce: bool = True) -> None:
     """Mark an identity blocked for the TTL and push onto the block feed.
 
-    Used by the threat worker after a window trips the anomaly count. Errors are
-    swallowed: the in-memory/db side of a block decision must not crash the task.
+    Used by the threat worker after a window trips the anomaly count. With
+    ``enforce=False`` the decision is recorded on the feed (visible to ops) but
+    no 403 marker is written — used to observe private/dev peers without ever
+    locking them out. Errors are swallowed: the in-memory/db side of a block
+    decision must not crash the task.
     """
     try:
         client = await cache_service._get_client()
-        marker_key = f"{settings.THREAT_LENS_BLOCKLIST_KEY_PREFIX}:{identity}"
-        await client.set(
-            marker_key,
-            "1",
-            ex=settings.THREAT_LENS_BLOCK_TTL_SECONDS,
-        )
+        if enforce:
+            marker_key = f"{settings.THREAT_LENS_BLOCKLIST_KEY_PREFIX}:{identity}"
+            await client.set(
+                marker_key,
+                "1",
+                ex=settings.THREAT_LENS_BLOCK_TTL_SECONDS,
+            )
         await client.lpush(
             settings.THREAT_LENS_BLOCKS_FEED_KEY,
             f"{int(time.time())}|{identity}|{reason}",

@@ -76,6 +76,10 @@ class Settings(BaseSettings):
     THREAT_LENS_WINDOW_MIN_ANOMALIES: int = 2
     THREAT_LENS_WINDOW_SIZE: int = 5
     THREAT_LENS_RATE_WINDOW_SECONDS: int = 60
+    # Loopback/private-range identities (Docker bridge, localhost) are scored
+    # and recorded on the block feed but NEVER get a 403 marker — the operator
+    # can't lock themselves out of their own stack while trialling the feature.
+    THREAT_LENS_SKIP_PRIVATE_PEERS: bool = True
 
     # ── Security response headers (see app/middleware/security_headers.py) ────
     # HSTS is emitted automatically only when APP_ENV=production.

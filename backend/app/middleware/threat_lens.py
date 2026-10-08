@@ -42,7 +42,11 @@ class ThreatLensMiddleware(BaseHTTPMiddleware):
             # keeps an unexpected transport error from turning into a 500.
             blocked = False
 
-        if blocked:
+        if blocked and not (
+            settings.THREAT_LENS_SKIP_PRIVATE_PEERS and tl.is_private_identity(identity)
+        ):
+            # A pre-existing marker on a private/dev peer is ignored too, so a
+            # leftover block can never hold the operator's own host hostage.
             return JSONResponse(
                 status_code=403,
                 content={

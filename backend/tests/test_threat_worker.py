@@ -150,6 +150,47 @@ class TestFailOpen:
         assert result["reason"] == "scoring_error"
 
 
+class TestIdentityPolicy:
+    @pytest.mark.parametrize(
+        "identity,expected",
+        [
+            ("127.0.0.1", True),
+            ("::1", True),
+            ("172.16.1.1", True),
+            ("10.2.3.4", True),
+            ("192.168.1.1", True),
+            ("203.0.113.66", False),  # TEST-NET-3: blockable for demos
+            ("198.51.100.55", False),  # TEST-NET-2: blockable for demos
+            ("not-an-ip", False),
+        ],
+    )
+    def test_is_private_identity(self, identity, expected):
+        assert tl.is_private_identity(identity) is expected
+
+    def test_private_peer_never_locked_out(self, threat_cache, trained_model, monkeypatch):
+        """A private/dev peer is watched (feed entry) but never marked or audited."""
+        persisted = []
+
+        async def _persist(*args, **kwargs):
+            persisted.append(args)
+
+        monkeypatch.setattr(tl, "persist_block", _persist)
+        payload = dict(ATTACK)
+        payload["ip"] = "10.0.0.5"
+        outcomes = [analyze_telemetry_task(dict(payload)) for _ in range(3)]
+
+        assert all(o["anomalous"] for o in outcomes)
+        assert outcomes[-1]["blocked"] is False
+        assert outcomes[-1]["note"] == "private_peer_skipped"
+        assert f"{settings.THREAT_LENS_BLOCKLIST_KEY_PREFIX}:10.0.0.5" not in threat_cache.store
+        assert threat_cache.store.get(settings.THREAT_LENS_BLOCKS_FEED_KEY), "feed records the decision"
+        assert persisted == []
+
+    def test_non_private_peer_still_blocked(self, threat_cache, trained_model, noop_side_effects):
+        outcomes = [analyze_telemetry_task(dict(ATTACK)) for _ in range(3)]
+        assert outcomes[2]["blocked"] is True
+
+
 class TestPersistBlock:
     """The REAL persist_block against a faked session factory.
 

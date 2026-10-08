@@ -66,7 +66,28 @@ class TestMiddlewareBehaviour:
         assert event.ip == "127.0.0.1"  # httpx ASGITransport's default client host
 
     @pytest.mark.asyncio
-    async def test_blocked_identity_gets_403_without_telemetry(self, threat_cache, telemetry_recorder):
+    async def test_blocked_identity_gets_403_without_telemetry(self, threat_cache, telemetry_recorder, monkeypatch):
+        # A real (non-private) client carrying a marker is blocked at the edge.
+        monkeypatch.setattr(tl, "client_identity", lambda request: "203.0.113.66")
+        threat_cache.store[f"{settings.THREAT_LENS_BLOCKLIST_KEY_PREFIX}:203.0.113.66"] = "1"
+        async with _client(_make_app()) as client:
+            response = await client.get("/ping")
+        assert response.status_code == 403
+        assert telemetry_recorder == []
+
+    @pytest.mark.asyncio
+    async def test_private_peer_marker_is_ignored(self, threat_cache, telemetry_recorder):
+        # Loopback/dev peers are never 403'd — a leftover marker can't hostaged
+        # the operator's own machine.
+        threat_cache.store[_BLOCK_KEY] = "1"
+        async with _client(_make_app()) as client:
+            response = await client.get("/ping")
+        assert response.status_code == 200
+        assert len(telemetry_recorder) == 1
+
+    @pytest.mark.asyncio
+    async def test_private_peer_skip_can_be_disabled(self, threat_cache, telemetry_recorder, monkeypatch):
+        monkeypatch.setattr(settings, "THREAT_LENS_SKIP_PRIVATE_PEERS", False)
         threat_cache.store[_BLOCK_KEY] = "1"
         async with _client(_make_app()) as client:
             response = await client.get("/ping")

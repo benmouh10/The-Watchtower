@@ -125,6 +125,20 @@ def analyze_telemetry_task(payload: dict) -> dict:
         }
 
     reason = f"anomalous_x{anomaly_hits}_risk_{risk:.2f}"
+    if settings.THREAT_LENS_SKIP_PRIVATE_PEERS and tl.is_private_identity(identity):
+        # Local/dev peers are watched but never locked out: record the decision
+        # on the feed without writing the 403 marker or the audit row.
+        _run_in_process_loop(tl.block_identity(identity, reason, enforce=False))
+        return {
+            "identity": identity,
+            "risk": risk,
+            "anomalous": anomalous,
+            "anomaly_hits": anomaly_hits,
+            "blocked": False,
+            "reason": reason,
+            "note": "private_peer_skipped",
+        }
+
     _run_in_process_loop(tl.block_identity(identity, reason))
     _run_in_process_loop(tl.persist_block(identity, reason, risk))
     return {
