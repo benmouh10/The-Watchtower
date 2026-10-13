@@ -43,6 +43,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install -r requirements-tts.txt
           pip install ../shared_core
           pip install ruff==0.6.9
 
