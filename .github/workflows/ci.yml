@@ -135,7 +135,7 @@ jobs:
           # backend/Dockerfile copies from the repository root
           # (backend/requirements.txt, shared_core/, …) — same context compose uses.
           context: .
-          dockerfile: backend/Dockerfile
+          file: backend/Dockerfile
           target: production
           push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
           tags: ${{ steps.meta_backend.outputs.tags }}
