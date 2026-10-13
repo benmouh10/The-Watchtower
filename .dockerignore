@@ -1,0 +1,15 @@
+.git
+**/node_modules
+**/.next
+**/__pycache__
+**/*.pyc
+**/.venv
+venv
+.env
+.env.*
+!*.env.example
+*.log
+globelens-ai-animation
+*.docx
+.gitignore
+.dockerignore

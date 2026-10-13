@@ -43,6 +43,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install ../shared_core
           pip install ruff==0.6.9
 
       # Informative only for now: the tree still carries pre-existing findings
@@ -130,7 +131,10 @@ jobs:
       - name: Build backend image
         uses: docker/build-push-action@v6
         with:
-          context: ./backend
+          # backend/Dockerfile copies from the repository root
+          # (backend/requirements.txt, shared_core/, …) — same context compose uses.
+          context: .
+          dockerfile: backend/Dockerfile
           target: production
           push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
           tags: ${{ steps.meta_backend.outputs.tags }}
