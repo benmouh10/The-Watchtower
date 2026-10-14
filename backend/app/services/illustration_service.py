@@ -27,7 +27,9 @@ import binascii
 import hashlib
 import os
 import struct
+import time
 import uuid
+from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
@@ -74,6 +76,15 @@ _REMOTE_PROVIDERS = ("openai", "grok", "nvidia", "pollinations")
 # no API key, and no per-image bill. The licence still follows the weights you
 # load, so hosting locally does not make a restricted model commercial.
 _LOCAL_PROVIDER = "local"
+
+# The keyless Pollinations image host: no credential and no per-image bill, but
+# it answers with the JPEG body directly and rate-limits to roughly one image a
+# minute, so it does not speak the OpenAI JSON shape at all.
+_FREE_PROVIDER = "pollinations-free"
+
+# The free host silently caps output here whatever size is requested, so asking
+# for more just wastes response time.
+_FREE_MAX_EDGE = 768
 
 
 class IllustrationUnavailable(RuntimeError):
@@ -222,6 +233,10 @@ class IllustrationService:
         """
         if not settings.ILLUSTRATION_ENABLED:
             return False
+        # Takes no credential, so configuredness is the whole check: there is
+        # nothing for an operator to set up before it can be used.
+        if self._provider == _FREE_PROVIDER:
+            return True
         if self._provider == _LOCAL_PROVIDER:
             return bool(self._base_url())
         if self._provider in _REMOTE_PROVIDERS:
@@ -333,6 +348,8 @@ class IllustrationService:
 
     async def request_image(self, prompt: str) -> Tuple[bytes, Optional[int]]:
         """Ask the provider for one image, returning (bytes, seed)."""
+        if self._provider == _FREE_PROVIDER:
+            return await self._request_free_image(prompt)
         client = self._client_or_raise()
         size = settings.ILLUSTRATION_SIZE
         # Only send the diffusion knobs when they are actually set. A distilled
@@ -383,6 +400,64 @@ class IllustrationService:
         if not url:
             raise IllustrationUnavailable("Provider response had neither b64_json nor url")
         return await self._download(url), seed
+
+    async def _request_free_image(self, prompt: str) -> Tuple[bytes, Optional[int]]:
+        """Fetch one image from the keyless Pollinations endpoint.
+
+        The authenticated endpoint bills per image and refuses once the balance
+        hits zero, which is a poor fit for a bulk backfill on a hobby budget. The
+        legacy image host takes no credential at all, so it keeps serving after
+        the balance is gone. It answers in three seconds and returns the JPEG
+        body directly rather than JSON, and it silently caps output at 768px
+        regardless of the size asked for.
+
+        It allows roughly one image per minute per client: a burst gets one 200
+        and then 402s with an empty body, and the quota refills on its own within
+        about a minute. So this waits its turn rather than firing a batch, and
+        treats 402 as "not yet" instead of as a hard failure — otherwise a batch
+        would mark every remaining event FAILED the moment the quota ran out.
+        """
+        import httpx
+
+        width = height = _FREE_MAX_EDGE
+        deadline = time.monotonic() + float(settings.ILLUSTRATION_FREE_MAX_WAIT_SECONDS)
+
+        async with httpx.AsyncClient(
+            timeout=float(settings.ILLUSTRATION_TIMEOUT_SECONDS),
+            follow_redirects=True,
+        ) as client:
+            while True:
+                seed = int(time.time() * 1000) % 2_000_000_000
+                url = (
+                    f"https://image.pollinations.ai/prompt/{quote(prompt, safe='')}"
+                    f"?width={width}&height={height}&seed={seed}&nologo=true"
+                )
+                try:
+                    response = await client.get(url)
+                except httpx.HTTPError as err:
+                    raise IllustrationUnavailable(f"Image provider call failed: {err}") from err
+
+                if response.status_code == 200:
+                    if not response.content[:3] == b"\xff\xd8\xff":
+                        raise IllustrationUnavailable(
+                            "Image provider returned a non-JPEG body"
+                        )
+                    return response.content, seed
+
+                # 402 with no body is the quota, not a payment problem, so it is
+                # retried after the refill interval instead of failing the event.
+                if response.status_code in (402, 429):
+                    if time.monotonic() >= deadline:
+                        raise IllustrationUnavailable(
+                            f"Free image quota did not refill within "
+                            f"{settings.ILLUSTRATION_FREE_MAX_WAIT_SECONDS:.0f}s"
+                        )
+                    await asyncio.sleep(float(settings.ILLUSTRATION_FREE_INTERVAL_SECONDS))
+                    continue
+
+                raise IllustrationUnavailable(
+                    f"Image provider call failed: HTTP {response.status_code}"
+                )
 
     async def _download(self, url: str) -> bytes:
         """Fetch an image the provider returned by URL rather than inline.

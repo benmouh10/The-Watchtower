@@ -219,7 +219,7 @@ class Settings(BaseSettings):
     # credentials reports the event as FAILED with the reason rather than
     # raising, so one missing key cannot stall a batch.
     ILLUSTRATION_ENABLED: bool = False
-    ILLUSTRATION_PROVIDER: str = "local"       # "local" | "pollinations" | "openai" | "grok"
+    ILLUSTRATION_PROVIDER: str = "local"       # "local" | "pollinations" | "pollinations-free" | "openai" | "grok"
     # SDXL base for a local server: permissive enough for a monetised site.
     # FLUX.1-dev is cheaper per image on a paid host but carries a
     # non-commercial restriction that follows the weights, including when you
@@ -276,6 +276,14 @@ class Settings(BaseSettings):
     # the current backlog; the loop exits early when the queue drains.
     ILLUSTRATION_MAX_BATCHES: int = 12
     ILLUSTRATION_SLEEP_SECONDS: float = 2.0
+
+    # Only used by the "pollinations-free" provider, which needs no key and no
+    # balance but allows about one image a minute per client. A 402 there means
+    # "quota not refilled yet", so the request is retried after the interval
+    # instead of failing the event; MAX_WAIT bounds that so a quota change is
+    # reported rather than retried forever.
+    ILLUSTRATION_FREE_INTERVAL_SECONDS: float = 62.0
+    ILLUSTRATION_FREE_MAX_WAIT_SECONDS: float = 300.0
 
     # ── Event enrichment scheduling ───────────────────────────────────────────
     # Clustering creates events as DRAFT with importance_score=0.0 as a

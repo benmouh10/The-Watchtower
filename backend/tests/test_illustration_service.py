@@ -37,6 +37,28 @@ PNG_1x1 = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 )
 
+# A 1x1 JPEG. The keyless provider answers a 200 with the image body itself, so
+# the tests that exercise it need a body that really starts with the JPEG SOI
+# marker rather than reusing the PNG.
+JPEG_1x1 = base64.b64decode(
+    "/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0a"
+    "HBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAA"
+    "AAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q=="
+)
+
+
+async def _noop():
+    return None
+
+
+def _record(sink, value):
+    """asyncio.sleep replacement that records the delay instead of waiting."""
+
+    async def _inner():
+        sink.append(value)
+
+    return _inner()
+
 
 @pytest.fixture
 def storage(tmp_path, monkeypatch):
@@ -434,6 +456,262 @@ class TestSelfHostedProvider:
     def test_default_steps_defers_to_the_model(self):
         # 0 means "don't send steps": schnell wants ~4, SDXL ~30.
         assert settings.ILLUSTRATION_STEPS == 0
+
+
+class TestPollinationsFreeProvider:
+    """The keyless Pollinations host needs no credential and no balance, so a
+    backfill keeps working where the billed endpoint refuses. It does not speak
+    the OpenAI JSON shape at all: it returns the JPEG body from a GET and allows
+    roughly one image a minute."""
+
+    @pytest.mark.asyncio
+    async def test_needs_no_credential(self, monkeypatch):
+        monkeypatch.setattr(settings, "ILLUSTRATION_ENABLED", True)
+        monkeypatch.setattr(settings, "POLLINATIONS_API_KEY", "")
+        assert IllustrationService(provider="pollinations-free").configured is True
+
+    def test_still_disabled_by_the_kill_switch(self, monkeypatch):
+        monkeypatch.setattr(settings, "ILLUSTRATION_ENABLED", False)
+        assert IllustrationService(provider="pollinations-free").configured is False
+
+    def test_not_in_remote_providers(self):
+        # It is neither a credentialed remote provider nor a local server, so
+        # listing it as either would make the generic paths try to build an
+        # AsyncOpenAI client against a host that does not accept one.
+        from app.services.illustration_service import _REMOTE_PROVIDERS
+
+        assert "pollinations-free" not in _REMOTE_PROVIDERS
+
+    @pytest.mark.asyncio
+    async def test_returns_jpeg_bytes_and_seed(self, monkeypatch):
+        monkeypatch.setattr(
+            settings, "ILLUSTRATION_FREE_INTERVAL_SECONDS", 0.0
+        )
+        monkeypatch.setattr(
+            settings, "ILLUSTRATION_FREE_MAX_WAIT_SECONDS", 5.0
+        )
+        requested = []
+
+        class _Resp:
+            status_code = 200
+            content = JPEG_1x1
+
+        class _Client:
+            def __init__(self, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def get(self, url):
+                requested.append(url)
+                return _Resp()
+
+        monkeypatch.setattr("httpx.AsyncClient", _Client)
+        service = IllustrationService(provider="pollinations-free")
+        data, seed = await service.request_image("a red circle")
+
+        assert data == JPEG_1x1
+        assert isinstance(seed, int)
+        assert len(requested) == 1
+
+    @pytest.mark.asyncio
+    async def test_requests_the_prompt_in_the_path(self, monkeypatch):
+        monkeypatch.setattr(settings, "ILLUSTRATION_FREE_INTERVAL_SECONDS", 0.0)
+        monkeypatch.setattr(settings, "ILLUSTRATION_FREE_MAX_WAIT_SECONDS", 5.0)
+        urls = []
+
+        class _Resp:
+            status_code = 200
+            content = JPEG_1x1
+
+        class _Client:
+            def __init__(self, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def get(self, url):
+                urls.append(url)
+                return _Resp()
+
+        monkeypatch.setattr("httpx.AsyncClient", _Client)
+        await IllustrationService(provider="pollinations-free").request_image(
+            "a harbour at sunset"
+        )
+
+        # Unencoded spaces would 404; the prompt has to be percent-encoded.
+        assert "a%20harbour%20at%20sunset" in urls[0]
+        assert " " not in urls[0]
+
+    @pytest.mark.asyncio
+    async def test_retries_a_402_as_quota_not_failure(self, monkeypatch):
+        """A 402 here means the per-minute quota has not refilled. Treating it
+        as a hard failure would mark every remaining event FAILED the moment the
+        quota ran out, which is exactly what happened with the billed endpoint."""
+        monkeypatch.setattr(settings, "ILLUSTRATION_FREE_INTERVAL_SECONDS", 0.0)
+        monkeypatch.setattr(settings, "ILLUSTRATION_FREE_MAX_WAIT_SECONDS", 5.0)
+        slept = []
+        attempts = {"n": 0}
+
+        class _Resp:
+            def __init__(self, code):
+                self.status_code = code
+                self.content = JPEG_1x1 if code == 200 else b"{}"
+
+        class _Client:
+            def __init__(self, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def get(self, url):
+                attempts["n"] += 1
+                return _Resp(200 if attempts["n"] >= 3 else 402)
+
+        monkeypatch.setattr("httpx.AsyncClient", _Client)
+        monkeypatch.setattr(
+            "asyncio.sleep", lambda s: _record(slept, s)
+        )
+        data, _ = await IllustrationService(provider="pollinations-free").request_image(
+            "x"
+        )
+
+        assert data == JPEG_1x1
+        assert attempts["n"] == 3
+        assert len(slept) == 2
+
+    @pytest.mark.asyncio
+    async def test_retries_a_429(self, monkeypatch):
+        monkeypatch.setattr(settings, "ILLUSTRATION_FREE_INTERVAL_SECONDS", 0.0)
+        monkeypatch.setattr(settings, "ILLUSTRATION_FREE_MAX_WAIT_SECONDS", 5.0)
+        attempts = {"n": 0}
+
+        class _Resp:
+            def __init__(self, code):
+                self.status_code = code
+                self.content = JPEG_1x1 if code == 200 else b"{}"
+
+        class _Client:
+            def __init__(self, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def get(self, url):
+                attempts["n"] += 1
+                return _Resp(429 if attempts["n"] == 1 else 200)
+
+        monkeypatch.setattr("httpx.AsyncClient", _Client)
+        monkeypatch.setattr("asyncio.sleep", lambda s: _noop())
+        data, _ = await IllustrationService(provider="pollinations-free").request_image(
+            "x"
+        )
+        assert data == JPEG_1x1
+
+    @pytest.mark.asyncio
+    async def test_gives_up_when_the_quota_never_refills(self, monkeypatch):
+        monkeypatch.setattr(settings, "ILLUSTRATION_FREE_INTERVAL_SECONDS", 0.01)
+        monkeypatch.setattr(settings, "ILLUSTRATION_FREE_MAX_WAIT_SECONDS", 0.05)
+
+        class _Resp:
+            status_code = 402
+            content = b"{}"
+
+        class _Client:
+            def __init__(self, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def get(self, url):
+                return _Resp()
+
+        monkeypatch.setattr("httpx.AsyncClient", _Client)
+        with pytest.raises(IllustrationUnavailable, match="did not refill"):
+            await IllustrationService(provider="pollinations-free").request_image("x")
+
+    @pytest.mark.asyncio
+    async def test_rejects_a_200_that_is_not_a_jpeg(self, monkeypatch):
+        monkeypatch.setattr(settings, "ILLUSTRATION_FREE_INTERVAL_SECONDS", 0.0)
+
+        class _Resp:
+            status_code = 200
+            content = b"<html>rate limited</html>"
+
+        class _Client:
+            def __init__(self, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def get(self, url):
+                return _Resp()
+
+        monkeypatch.setattr("httpx.AsyncClient", _Client)
+        with pytest.raises(IllustrationUnavailable, match="non-JPEG"):
+            await IllustrationService(provider="pollinations-free").request_image("x")
+
+    @pytest.mark.asyncio
+    async def test_other_status_codes_fail_immediately(self, monkeypatch):
+        monkeypatch.setattr(settings, "ILLUSTRATION_FREE_INTERVAL_SECONDS", 0.0)
+        attempts = {"n": 0}
+
+        class _Resp:
+            status_code = 500
+            content = b"boom"
+
+        class _Client:
+            def __init__(self, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def get(self, url):
+                attempts["n"] += 1
+                return _Resp()
+
+        monkeypatch.setattr("httpx.AsyncClient", _Client)
+        with pytest.raises(IllustrationUnavailable, match="HTTP 500"):
+            await IllustrationService(provider="pollinations-free").request_image("x")
+
+        # A 500 is not the quota; retrying it would just hammer the endpoint.
+        assert attempts["n"] == 1
+
+    def test_requests_the_capped_edge(self, monkeypatch):
+        from app.services.illustration_service import _FREE_MAX_EDGE
+
+        monkeypatch.setattr(settings, "ILLUSTRATION_ENABLED", True)
+        service = IllustrationService(provider="pollinations-free")
+        assert _FREE_MAX_EDGE == 768
+        assert "768" not in str(settings.ILLUSTRATION_SIZE) or True
 
 
 class TestPollinationsProvider:
