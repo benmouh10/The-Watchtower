@@ -35,7 +35,14 @@ class ThreatLensMiddleware(BaseHTTPMiddleware):
 
         identity = tl.client_identity(request)
 
-        if await tl.is_identity_blocked(identity):
+        try:
+            blocked = await tl.is_identity_blocked(identity)
+        except Exception:
+            # Service already fails open internally; this belt-and-braces guard
+            # keeps an unexpected transport error from turning into a 500.
+            blocked = False
+
+        if blocked:
             return JSONResponse(
                 status_code=403,
                 content={
@@ -52,7 +59,10 @@ class ThreatLensMiddleware(BaseHTTPMiddleware):
         # about the *client*, and streaming a media file still telemetries the
         # *request* via call_next having streamed, so the status stays accurate.
         if response.status_code < 500:
-            await tl.enqueue_telemetry(
-                tl.build_telemetry(request, status_code=response.status_code)
-            )
+            try:
+                await tl.enqueue_telemetry(
+                    tl.build_telemetry(request, status_code=response.status_code)
+                )
+            except Exception:
+                pass
         return response

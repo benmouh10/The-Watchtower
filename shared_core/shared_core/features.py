@@ -43,6 +43,7 @@ _METHOD_INDEX = {
 _PAYLOAD_UPPER = 10_000_000  # clipping point for absurd uploads, in bytes.
 _PATH_DEPTH_CAP = 12
 _HEADER_COUNT_CAP = 200
+_RATE_CAP = 100_000  # requests/60s; a sane ceiling so a poisoned stream stays finite
 
 
 def _method_number(method: str) -> float:
@@ -54,7 +55,7 @@ def extract_feature_vector(event: "TelemetryEvent") -> np.ndarray:
     tod = float(event.time_of_day)
     return np.asarray(
         [
-            float(max(0.0, event.request_rate)),
+            float(min(max(0.0, event.request_rate), _RATE_CAP)),
             math.log1p(min(max(0, event.payload_bytes), _PAYLOAD_UPPER)),
             float(min(max(0, event.header_count), _HEADER_COUNT_CAP)),
             float(min(max(0.0, event.header_entropy), 10.0)),
