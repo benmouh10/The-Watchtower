@@ -29,6 +29,11 @@ volumes:
   # must see the same directory.
   media:
     driver: local
+  # Threat Lens model artifact: trained once, read by backend + threat worker.
+  # Docker seeds a fresh volume from the image's /app/models (the TTS model),
+  # and the trained threat_lens.joblib is copied over at provisioning time.
+  model_data:
+    driver: local
 
 # ---------------------------------------------------------------------------
 # Networks — isolated internal network for inter-service communication
@@ -163,8 +168,8 @@ services:
     # Local development keeps using `build` via `docker compose up --build`.
     image: ghcr.io/benmouh10/globelens_ai-backend:${IMAGE_TAG:-latest}
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
       target: development          # Uses the dev stage for hot-reload
     container_name: globelens_backend
     restart: unless-stopped
@@ -181,6 +186,9 @@ services:
       # container's dependencies instead of the host's Python.
       - ./backend/tests:/app/tests
       - media:/app/media
+      # Trained Threat Lens artifact + TTS model (the volume is seeded from the
+      # image's /app/models on first use).
+      - model_data:/app/models
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     environment:
@@ -266,6 +274,22 @@ services:
       RATE_LIMIT_GUEST: ${RATE_LIMIT_GUEST:-30/minute}
       # Only enable behind a trusted proxy that sets X-Forwarded-For.
       RATE_LIMIT_TRUST_FORWARDED: ${RATE_LIMIT_TRUST_FORWARDED:-false}
+
+      # ── Threat Lens (windowed abusive-traffic blocking; S5 sprint 1) ──
+      # Model is the volume-mounted threat_lens.joblib; the worker is a
+      # dedicated container ("threat" service) so request scoring never starves
+      # the main queue. Baked defaults match config.py; these may be overridden
+      # via .env. Turn the middleware on with THREAT_LENS_ENABLED=true only
+      # after the artifact exists in the model_data volume.
+      THREAT_LENS_ENABLED: ${THREAT_LENS_ENABLED:-false}
+      THREAT_LENS_QUEUE: ${THREAT_LENS_QUEUE:-threat}
+      THREAT_LENS_TASK: ${THREAT_LENS_TASK:-app.worker.threat_tasks.analyze_telemetry_task}
+      THREAT_LENS_MODEL_PATH: ${THREAT_LENS_MODEL_PATH:-/app/models/threat_lens.joblib}
+      THREAT_LENS_RISK_THRESHOLD: ${THREAT_LENS_RISK_THRESHOLD:-0.90}
+      THREAT_LENS_BLOCK_TTL_SECONDS: ${THREAT_LENS_BLOCK_TTL_SECONDS:-3600}
+      THREAT_LENS_WINDOW_MIN_ANOMALIES: ${THREAT_LENS_WINDOW_MIN_ANOMALIES:-2}
+      THREAT_LENS_WINDOW_SIZE: ${THREAT_LENS_WINDOW_SIZE:-5}
+      THREAT_LENS_RATE_WINDOW_SECONDS: ${THREAT_LENS_RATE_WINDOW_SECONDS:-60}
 
       # ── Security response headers (HSTS auto-enabled when APP_ENV=production) ──
       SECURITY_HEADERS_ENABLED: ${SECURITY_HEADERS_ENABLED:-true}
@@ -377,12 +401,14 @@ services:
     # Same published backend image as `backend`; only the command differs.
     image: ghcr.io/benmouh10/globelens_ai-backend:${IMAGE_TAG:-latest}
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
       target: development
     container_name: globelens_worker
     restart: unless-stopped
-    command: celery -A app.worker.celery_app.celery_app worker --loglevel=info
+    # Stay on the default queue: the Threat Lens scoring worker runs in its own
+    # "threat" container, and -Q celery keeps this one from stealing those jobs.
+    command: celery -A app.worker.celery_app.celery_app worker -Q celery --loglevel=info
     volumes:
       - ./backend/app:/app/app:delegated
       - ./backend/alembic.ini:/app/alembic.ini
@@ -444,13 +470,71 @@ services:
       disable: true
 
   # ─────────────────────────────────────────────────────────────────────────
+  # Threat Lens Worker — dedicated scoring for the "threat" queue
+  # ─────────────────────────────────────────────────────────────────────────
+  # Consumes request telemetry, scores it against the volume-mounted model, and
+  # enforces the windowed block (403 + blocked_ips row). Also hosts the internal
+  # /score debug API on :9000 as a sidecar. Runs on --autoscale (4,1): the
+  # lightweight equivalent of a KEDA autoscaler per the S5 architecture.
+  threat:
+    image: ghcr.io/benmouh10/globelens_ai-backend:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: development
+    container_name: globelens_threat
+    restart: unless-stopped
+    entrypoint: ["sh", "/app/scripts/threat_entry.sh"]
+    volumes:
+      - ./backend/app:/app/app:delegated
+      - ./backend/alembic.ini:/app/alembic.ini
+      - ./backend/alembic:/app/alembic
+      - ./backend/scripts:/app/scripts
+      - ./backend/logs:/app/logs
+      # Trained model artifact, shared with the API (already seeded with TTS).
+      - model_data:/app/models
+    ports:
+      - "${THREAT_SCORE_PORT:-9000}:9000"
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      SECRET_KEY: ${SECRET_KEY:-super_secret_dev_key_change_in_production}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-globelens}:${POSTGRES_PASSWORD:-globelens_secret}@db:5432/${POSTGRES_DB:-globelens_db}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_secret}@cache:6379/0
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-}
+      THREAT_LENS_ENABLED: ${THREAT_LENS_ENABLED:-false}
+      THREAT_LENS_QUEUE: ${THREAT_LENS_QUEUE:-threat}
+      THREAT_LENS_TASK: ${THREAT_LENS_TASK:-app.worker.threat_tasks.analyze_telemetry_task}
+      THREAT_LENS_MODEL_PATH: ${THREAT_LENS_MODEL_PATH:-/app/models/threat_lens.joblib}
+      THREAT_LENS_RISK_THRESHOLD: ${THREAT_LENS_RISK_THRESHOLD:-0.90}
+      THREAT_LENS_BLOCKLIST_KEY_PREFIX: ${THREAT_LENS_BLOCKLIST_KEY_PREFIX:-threat:blocked}
+      THREAT_LENS_BLOCKS_FEED_KEY: ${THREAT_LENS_BLOCKS_FEED_KEY:-threat:blocks}
+      THREAT_LENS_BLOCK_TTL_SECONDS: ${THREAT_LENS_BLOCK_TTL_SECONDS:-3600}
+      THREAT_LENS_WINDOW_MIN_ANOMALIES: ${THREAT_LENS_WINDOW_MIN_ANOMALIES:-2}
+      THREAT_LENS_WINDOW_SIZE: ${THREAT_LENS_WINDOW_SIZE:-5}
+      THREAT_LENS_RATE_WINDOW_SECONDS: ${THREAT_LENS_RATE_WINDOW_SECONDS:-60}
+    networks:
+      - globelens_net
+    depends_on:
+      db:
+        condition: service_healthy
+      cache:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ─────────────────────────────────────────────────────────────────────────
   # Celery Beat — scheduler that emits digest tasks on the configured cadence
   # ─────────────────────────────────────────────────────────────────────────
   beat:
     image: ghcr.io/benmouh10/globelens_ai-backend:${IMAGE_TAG:-latest}
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
       target: development
     container_name: globelens_beat
     restart: unless-stopped

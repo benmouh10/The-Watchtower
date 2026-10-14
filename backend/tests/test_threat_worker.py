@@ -112,6 +112,20 @@ class TestFailOpen:
         assert result["skipped"] is True
         assert result["reason"] == "model_unavailable"
 
+    def test_model_appearing_later_self_heals(self, threat_cache, tmp_path, monkeypatch, noop_side_effects):
+        """The cached detector retries the load instead of locking 'unloaded' in."""
+        monkeypatch.setattr(threat_tasks, "_detector", None)
+        normal, _ = build_synthetic_traffic(n_normal=150, n_attack=75, seed=7)
+        path = tmp_path / "threat_lens.joblib"
+        monkeypatch.setattr(settings, "THREAT_LENS_MODEL_PATH", str(path))
+
+        assert analyze_telemetry_task(dict(ATTACK))["reason"] == "model_unavailable"
+
+        AnomalyDetector(str(path), seed=7).train(normal).persist()
+        outcome = analyze_telemetry_task(dict(ATTACK))
+        assert outcome.get("skipped") is not True
+        assert outcome["anomalous"] is True
+
     def test_unknown_identity_is_skipped(self, threat_cache, trained_model, noop_side_effects):
         payload = dict(ATTACK)
         payload["ip"] = "unknown"

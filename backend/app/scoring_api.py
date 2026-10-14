@@ -37,15 +37,20 @@ class ScoreRequest(BaseModel):
 
 
 def _get_detector() -> AnomalyDetector:
-    """Process-cached, fail-open detector."""
+    """Process-cached, fail-open detector.
+
+    Self-healing: if the cached instance is not loaded (e.g. the sidecar started
+    before the model artifact was placed on the volume), every call retries the
+    load so the API comes online when the artifact appears.
+    """
     global _detector
     if _detector is None:
-        detector = AnomalyDetector(model_path=settings.THREAT_LENS_MODEL_PATH)
+        _detector = AnomalyDetector(model_path=settings.THREAT_LENS_MODEL_PATH)
+    if not _detector.is_loaded:
         try:
-            detector.load()
+            _detector.load()
         except Exception:
             pass
-        _detector = detector
     return _detector
 
 

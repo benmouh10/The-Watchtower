@@ -57,15 +57,21 @@ def _run_in_process_loop(coroutine) -> object:
 
 
 def _get_detector() -> AnomalyDetector:
-    """Process-cached detector; returns an unloaded (fail-open) one on any error."""
+    """Process-cached detector; returns an unloaded (fail-open) one on any error.
+
+    Self-healing: if the cached instance is not loaded (e.g. the container
+    started before the model artifact was placed on the volume), every call
+    retries the load rather than locking "unloaded" in for the process life.
+    """
     global _detector
     if _detector is None:
         detector = AnomalyDetector(model_path=settings.THREAT_LENS_MODEL_PATH)
+        _detector = detector
+    if not _detector.is_loaded:
         try:
-            detector.load()
+            _detector.load()
         except Exception:
             logger.exception("Threat Lens model load failed; scoring disabled")
-        _detector = detector
     return _detector
 
 
