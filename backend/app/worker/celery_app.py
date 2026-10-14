@@ -35,6 +35,14 @@ celery_app.conf.update(
     broker_connection_retry_on_startup=True,
 )
 
+# Threat Lens telemetry goes to its own queue so high-frequency request scoring
+# can never starve enrichment/newsletter work on the default "celery" queue —
+# and the main worker must not consume it, which the threat container's
+# `-Q threat` flag makes explicit on the other end.
+celery_app.conf.task_routes = {
+    settings.THREAT_LENS_TASK: {"queue": settings.THREAT_LENS_QUEUE},
+}
+
 celery_app.conf.beat_schedule = {
     "enrich-pending-events": {
         "task": "app.worker.tasks.enrich_pending_events_task",
