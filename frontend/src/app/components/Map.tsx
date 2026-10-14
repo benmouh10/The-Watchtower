@@ -3,6 +3,7 @@
 import React, { useEffect } from "react";
 import L from "leaflet";
 import { MapContainer, TileLayer, Marker, useMap, Tooltip, Popup } from "react-leaflet";
+import type { EventIllustration } from "./EventIllustrationImage";
 
 interface MapEvent {
   id: string;
@@ -15,6 +16,37 @@ interface MapEvent {
   importance_score: number;
   source_count: number;
   bias_lean?: string;
+  /** Sent by /api/v1/events/map; present once the event has artwork. */
+  illustration?: EventIllustration | null;
+}
+
+/**
+ * Thumbnail for a marker preview. Plain <img> rather than EventIllustrationImage:
+ * that component owns a <figure>, a caption and full-width sizing, and a marker
+ * preview needs neither — it needs a fixed square that will not push the
+ * tooltip around. The permanent "generated image" label lives on the event
+ * detail page, where the artwork is presented; here it is offered as a tooltip
+ * so the credit is still reachable without crowding a 220px popup.
+ */
+function MarkerThumb({
+  illustration,
+  className = "h-11 w-11",
+}: {
+  illustration?: EventIllustration | null;
+  /** Base size class; the cluster tooltip uses a smaller one to fit three. */
+  className?: string;
+}) {
+  if (!illustration?.url) return null;
+  return (
+    <img
+      src={illustration.url}
+      alt=""
+      title={illustration.attribution || undefined}
+      loading="lazy"
+      decoding="async"
+      className={`${className} shrink-0 rounded border border-outline-variant/40 object-cover`}
+    />
+  );
 }
 
 interface MapProps {
@@ -190,19 +222,22 @@ export default function Map({ events, selectedEvent, onSelectEvent, activeTopicF
               {/* Hover Tooltip */}
               <Tooltip direction="top" offset={[0, -10]} opacity={0.97} className="custom-map-tooltip">
                 {count === 1 ? (
-                  <div className="flex flex-col gap-1 max-w-[220px]">
-                    <div className="flex items-center justify-between gap-2 text-[9px] font-mono-data text-zinc-400">
-                      <span className="font-bold uppercase" style={{ color: palette.hex }}>
-                        {rep.topic}
+                  <div className="flex gap-2 max-w-[240px]">
+                    <MarkerThumb illustration={rep.illustration} />
+                    <div className="flex flex-col gap-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2 text-[9px] font-mono-data text-zinc-400">
+                        <span className="font-bold uppercase" style={{ color: palette.hex }}>
+                          {rep.topic}
+                        </span>
+                        <span>Score: {rep.importance_score.toFixed(1)}</span>
+                      </div>
+                      <h4 className="text-xs font-semibold text-white leading-snug line-clamp-2">
+                        {rep.title}
+                      </h4>
+                      <span className="text-[9px] text-zinc-500 font-mono-data mt-0.5">
+                        {rep.country || "Global"} · {rep.source_count || 1} source{rep.source_count !== 1 ? "s" : ""}
                       </span>
-                      <span>Score: {rep.importance_score.toFixed(1)}</span>
                     </div>
-                    <h4 className="text-xs font-semibold text-white leading-snug line-clamp-2">
-                      {rep.title}
-                    </h4>
-                    <span className="text-[9px] text-zinc-500 font-mono-data mt-0.5">
-                      {rep.country || "Global"} · {rep.source_count || 1} source{rep.source_count !== 1 ? "s" : ""}
-                    </span>
                   </div>
                 ) : (
                   <div className="flex flex-col gap-1.5 max-w-[240px]">
@@ -214,8 +249,11 @@ export default function Map({ events, selectedEvent, onSelectEvent, activeTopicF
                     </div>
                     <div className="border-t border-zinc-800/60 pt-1 mt-1 flex flex-col gap-1">
                       {group.slice(0, 3).map((evt) => (
-                        <div key={evt.id} className="text-[9px] text-zinc-400 truncate">
-                          • {evt.title}
+                        <div key={evt.id} className="flex items-center gap-1.5">
+                          <MarkerThumb illustration={evt.illustration} className="h-7 w-7" />
+                          <span className="text-[9px] text-zinc-400 truncate min-w-0 flex-1">
+                            • {evt.title}
+                          </span>
                         </div>
                       ))}
                       {count > 3 && (
@@ -248,19 +286,22 @@ export default function Map({ events, selectedEvent, onSelectEvent, activeTopicF
                           <button
                             key={evt.id}
                             onClick={() => onSelectEvent(evt)}
-                            className="w-full text-left p-2 rounded-lg bg-zinc-900/50 hover:bg-primary-container border border-outline-variant/30 hover:border-primary/50 transition-all flex flex-col gap-1 group"
+                            className="w-full text-left p-2 rounded-lg bg-zinc-900/50 hover:bg-primary-container border border-outline-variant/30 hover:border-primary/50 transition-all flex gap-2 items-start group"
                           >
-                            <div className="flex justify-between items-center text-[9px]">
-                              <span className="font-bold uppercase" style={{ color: evtPalette.hex }}>
-                                {evt.topic}
-                              </span>
-                              <span className="px-1.5 py-0.5 bg-zinc-800 rounded font-mono-data text-zinc-400">
-                                Score: {evt.importance_score.toFixed(1)}
-                              </span>
+                            <MarkerThumb illustration={evt.illustration} />
+                            <div className="flex flex-col gap-1 min-w-0 flex-1">
+                              <div className="flex justify-between items-center text-[9px]">
+                                <span className="font-bold uppercase" style={{ color: evtPalette.hex }}>
+                                  {evt.topic}
+                                </span>
+                                <span className="px-1.5 py-0.5 bg-zinc-800 rounded font-mono-data text-zinc-400">
+                                  Score: {evt.importance_score.toFixed(1)}
+                                </span>
+                              </div>
+                              <p className="text-xs text-zinc-200 group-hover:text-white font-semibold line-clamp-2 leading-snug">
+                                {evt.title}
+                              </p>
                             </div>
-                            <p className="text-xs text-zinc-200 group-hover:text-white font-semibold line-clamp-2 leading-snug">
-                              {evt.title}
-                            </p>
                           </button>
                         );
                       })}
