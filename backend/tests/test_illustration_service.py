@@ -912,6 +912,10 @@ class TestComposePrompt:
 
         assert _STYLE_SUFFIX in prompt
         assert _ASPECT_CLAUSE in prompt
+        # A prompt asked for "the faded faces of countless Brazilians" etched
+        # into a voting booth; the refusal has to cover carved and printed
+        # faces too, not only people standing in the scene.
+        assert "no faces" in prompt
         assert len(prompt) <= settings.ILLUSTRATION_PROMPT_MAX_CHARS
 
 

@@ -267,10 +267,10 @@ class Settings(BaseSettings):
     # see to judge the image.
     # 400 was below the length of the descriptions the model was already writing:
     # they were being cut mid-sentence, usually inside the colour palette, so the
-    # image was left without one. The fixed clauses are 424 characters now that
-    # the house palette and the refusals ride along with every prompt, so 900
-    # leaves ~475 for a 60-word scene without clipping it.
-    ILLUSTRATION_PROMPT_MAX_CHARS: int = 900
+    # image was left without one. The fixed clauses are 495 characters now that
+    # the house palette and the refusals ride along with every prompt, so 1000
+    # leaves ~505 for a 60-word scene without clipping it.
+    ILLUSTRATION_PROMPT_MAX_CHARS: int = 1000
     ILLUSTRATION_ATTRIBUTION: str = "Generated image — not a photograph"
     # Same reasoning as LLM_ENRICH_LOCK_TTL_SECONDS: the worker runs one
     # process per core, so an unguarded backfill runs every batch in parallel and
