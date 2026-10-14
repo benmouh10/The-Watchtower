@@ -134,6 +134,13 @@ RUN addgroup --system globelens && \
 
 COPY --chown=globelens:globelens ./app ./app
 
+# The media volume mounts here, and Docker seeds an empty named volume from the
+# image directory it covers — including its ownership. Without this the
+# mountpoint is created root-owned by the runtime and every illustration write
+# from USER globelens fails with EACCES, while reads through /media/* 404.
+RUN mkdir -p /app/media/illustrations && \
+    chown -R globelens:globelens /app/media
+
 USER globelens
 
 EXPOSE 8000

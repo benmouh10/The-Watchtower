@@ -17,6 +17,15 @@
 #   * dev bind mounts removed (`!reset`); production code is baked into the image
 #   * APP_ENV / NODE_ENV forced to production
 #
+# `volumes: !reset []` clears every inherited mount, including the named `media`
+# volume — and that one is not a dev convenience. The worker writes generated
+# illustrations to ILLUSTRATION_STORAGE_DIR (/app/media/illustrations) and the
+# backend serves them back over /media/*, so dropping it would leave every image
+# on the container's writable layer, gone at the next `up`. It is re-added below
+# for the two services that touch it; alembic.ini and alembic/ are baked into
+# the image already, and logs are deliberately left to the container in
+# production.
+#
 # Requires Compose v2.24+ for the `!reset` tag (it clears values inherited
 # from the base file instead of appending to them).
 # =============================================================================
@@ -25,7 +34,10 @@ services:
   backend:
     build:
       target: production
-    volumes: !reset []
+    # !override replaces the whole inherited mount list rather than appending to
+    # it, so the dev bind mounts stay gone and only this one survives.
+    volumes: !override
+      - media:/app/media
     environment:
       APP_ENV: production
 
@@ -39,7 +51,10 @@ services:
   worker:
     build:
       target: production
-    volumes: !reset []
+    # The worker is what writes the illustrations; without this mount they land
+    # on the container layer and vanish on redeploy.
+    volumes: !override
+      - media:/app/media
     environment:
       APP_ENV: production
 
