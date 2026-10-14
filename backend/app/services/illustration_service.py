@@ -61,20 +61,35 @@ _SIGNATURES: Tuple[Tuple[bytes, str], ...] = (
 # chance. Real people are refused too: a generated picture of a named official
 # is a fabrication of something that was never photographed.
 #
-# It carries no positive style instruction on purpose. The art direction the
-# model writes supplies the palette, light and mood per story; a house look
-# stacked on top of that is what makes three hundred images look like one.
+# The positive half is the house look. Three hundred images written by a
+# per-event model come back in three hundred unrelated palettes, and a map
+# covered in them reads as a broken feed rather than as one publication. The
+# palette comes from the interface's own colours — deep ink blue, pale
+# periwinkle, one warm amber — and it is delivered as light and medium
+# (cinematic, matte-painted) rather than as flat vector shapes, which is what
+# made an earlier house style look like stock corporate artwork.
+#
+# The refusals are structural rather than a reminder to the model writing the
+# art direction: that model obeyed "no words in the picture" by asking for "a
+# rally sign reading Democracy in Action", so the negatives name the people
+# framing to use instead of only forbidding what is wrong.
 _STYLE_SUFFIX = (
-    "editorial news illustration, not a photograph, "
-    "no text, no lettering, no numbers, no logos, no watermarks, "
-    "no flags, no recognisable public figures"
+    "cinematic lighting, deep shadows, matte painting, "
+    "near-monochromatic deep ink-blue palette with pale periwinkle highlights "
+    "and a single warm amber accent, "
+    "people only as silhouettes, distant figures or over-the-shoulder, "
+    "no typography, no labels, no text, no letters, no numbers, "
+    "no logos, no watermarks, no flags, no recognisable public figures, "
+    "not a photograph"
 )
 
-_ASPECT_BY_SHAPE = {
-    "wide": "a wide horizontal composition, subject centred with space on both sides",
-    "tall": "a tall vertical composition",
-    "square": "a balanced square composition",
-}
+# Both providers render square whatever the prompt asks for — the free host caps
+# output at 768x768 and ILLUSTRATION_SIZE is 1024x1024 — so the old "wide
+# horizontal composition" clause was describing a frame the generated image
+# would then be cropped out of. Square is also what the cards, map pop-ups and
+# side timelines actually have room for; a 16:9 strip shrinks to nothing on a
+# phone.
+_ASPECT_CLAUSE = "a square composition, subject centred with breathing room"
 
 # Providers reachable over the network, each needing its own credential.
 _REMOTE_PROVIDERS = ("openai", "grok", "nvidia", "pollinations")
@@ -307,9 +322,13 @@ class IllustrationService:
         It is given the enriched summary rather than just the headline because
         that summary is the analysis — the entities, the cause and the stake of
         the story — and it is what separates "a war" from a picture of the thing
-        the war is actually about. Asked for one short line it returned a
-        preamble and a paragraph about symbolism; asked for a specified
-        structure of concrete detail it describes objects instead.
+        the war is actually about.
+
+        The brief asks for atmosphere around one anchor object rather than a
+        list of objects. Asked for "two or three concrete details" the model
+        obliged with a ballot box beside a map beside a cityscape, and a prompt
+        that enumerates ends up as a crowded still life with no focal point; a
+        single object placed in weather and light composes itself.
         """
         fallback = build_fallback_prompt(title, topic, country)
         try:
@@ -327,26 +346,27 @@ class IllustrationService:
                     "You are an art director at an international news magazine. "
                     "You are given the headline, topic, country and the written "
                     "analysis of a news event. Read the analysis first: it holds "
-                    "the objects, the cause and the stake of the story, and it "
-                    "is what you illustrate.\n\n"
-                    "From it choose the single most telling visual idea and "
-                    "describe the picture that would carry it, as one line of "
-                    "45 to 70 words containing: the scene and its setting; two "
-                    "or three concrete objects or details taken from the "
-                    "analysis; the light and the colour palette; and the mood. "
-                    "Ground every element in something the analysis actually "
-                    "says rather than illustrating the topic in general.\n\n"
+                    "the object, the cause and the stake of the story.\n\n"
+                    "Choose ONE symbolic object that stands for the story and "
+                    "describe an atmospheric scene built around it: where the "
+                    "object sits, what the light is doing, the texture of the "
+                    "air, and the mood. The object is the anchor and the only "
+                    "one - no second object, no collection of things, no still "
+                    "life. Let the setting and the light carry the meaning "
+                    "instead of adding detail. Ground the object and the "
+                    "atmosphere in something the analysis actually says, rather "
+                    "than illustrating the topic in general.\n\n"
                     "Refuse, without exception: any real person by name or by "
                     "face; any flag, logo or brand; and any writing of any "
                     "kind. Never describe an object that carries writing - a "
                     "sign, banner, placard, poster, screen, newspaper, book or "
                     "headline - because the picture is to contain no lettering "
-                    "at all. People may appear only as silhouettes, from "
-                    "behind, or at a distance; no close-up faces. Never state "
-                    "that it is a photograph. Do not open with a label such as "
-                    "'Illustration:' or 'Abstract editorial illustration:' - "
-                    "begin with the scene itself. Reply with that one line and "
-                    "nothing else, in English."
+                    "at all. People may appear only as silhouettes, distant "
+                    "figures or an over-the-shoulder view; no close-up faces. "
+                    "Never state that it is a photograph. Do not open with a "
+                    "label such as 'Illustration:' - begin with the scene "
+                    "itself. Reply with one line of 40 to 60 words and nothing "
+                    "else, in English."
                 ),
                 prompt=(
                     f"Headline: {title}\n"
@@ -354,9 +374,8 @@ class IllustrationService:
                     f"Country: {country or 'unspecified'}\n"
                     f"Analysis: {(summary or '')[:1500]}"
                 ),
-                # A 70-word line is ~450 characters, well past 120 tokens; the
-                # old limit cut the description off in the middle of its
-                # palette.
+                # 60 words is ~400 characters, well past 120 tokens; the old
+                # limit cut the description off in the middle of its palette.
                 max_tokens=300,
                 temperature=0.6,
             )
@@ -374,12 +393,12 @@ class IllustrationService:
         # would drop those clauses off the end whenever the model was verbose,
         # which is precisely when the negatives are most needed.
         body = sanitize_prompt(cleaned, self._prompt_budget())
-        return f"{body}, {_STYLE_SUFFIX}, {_ASPECT_BY_SHAPE['wide']}"
+        return f"{body}, {_STYLE_SUFFIX}, {_ASPECT_CLAUSE}"
 
     @staticmethod
     def _prompt_budget() -> int:
         """Room left for the scene description once the fixed clauses are added."""
-        suffix = 2 + len(_STYLE_SUFFIX) + 2 + len(_ASPECT_BY_SHAPE["wide"])
+        suffix = 2 + len(_STYLE_SUFFIX) + 2 + len(_ASPECT_CLAUSE)
         return max(settings.ILLUSTRATION_PROMPT_MAX_CHARS - suffix, 60)
 
     async def request_image(self, prompt: str) -> Tuple[bytes, Optional[int]]:

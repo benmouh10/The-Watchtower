@@ -847,7 +847,8 @@ class TestComposePrompt:
         # The aspect clause is appended deliberately, so containment is the
         # assertion; equality would pin away a useful suffix.
         assert prompt.startswith("an editorial illustration of flood defences")
-        assert "wide" in prompt
+        assert "square" in prompt
+        assert "wide" not in prompt
         assert llm.prompts, "the LLM should be given the event to work from"
 
     @pytest.mark.asyncio
@@ -890,7 +891,11 @@ class TestComposePrompt:
 
         brief = llm.systems[0].lower()
         assert "analysis" in brief
-        assert "45 to 70 words" in brief
+        assert "40 to 60 words" in brief
+        # Atmosphere around one anchor, not a list of props: "two or three
+        # concrete objects" produced cluttered still lifes.
+        assert "one symbolic object" in brief
+        assert "no still life" in brief
         assert "The analysis of the event" in llm.prompts[0]
 
     @pytest.mark.asyncio
@@ -899,14 +904,14 @@ class TestComposePrompt:
         appended to it, so the no-text and no-people refusals fell off the end
         exactly when the model wrote at length — and it is verbose models that
         invent lettering."""
-        from app.services.illustration_service import _ASPECT_BY_SHAPE, _STYLE_SUFFIX
+        from app.services.illustration_service import _ASPECT_CLAUSE, _STYLE_SUFFIX
 
         service = _service(_FakeClient(_FakeImages([])), llm=_FakeLLM(text="word " * 4000))
 
         prompt = await service.compose_prompt("Title", "Summary", "CLIMATE", "Spain")
 
         assert _STYLE_SUFFIX in prompt
-        assert _ASPECT_BY_SHAPE["wide"] in prompt
+        assert _ASPECT_CLAUSE in prompt
         assert len(prompt) <= settings.ILLUSTRATION_PROMPT_MAX_CHARS
 
 
