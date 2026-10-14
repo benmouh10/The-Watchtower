@@ -196,6 +196,22 @@ def generate_illustrations_task(
 
                 if result.get("generated", 0) == 0:
                     break
+
+                # Re-arm the lease between batches. A free-provider batch can take
+                # over an hour — the quota allows about one image a minute — so a
+                # fixed TTL shorter than the whole task would lapse mid-run and
+                # let a second task in alongside this one. Re-setting keeps it to
+                # the length of a single batch rather than the whole task.
+                renewer = aioredis.from_url(settings.REDIS_URL)
+                try:
+                    await renewer.set(
+                        _ILLUSTRATION_LOCK_KEY,
+                        "1",
+                        ex=settings.ILLUSTRATION_LOCK_TTL_SECONDS,
+                    )
+                finally:
+                    await renewer.aclose()
+
                 if batches < max(1, ceiling):
                     await asyncio.sleep(settings.ILLUSTRATION_SLEEP_SECONDS)
 

@@ -22,10 +22,14 @@ class _FakeLock:
         self.held = held
         self.deleted: list[str] = []
         self.ttl: int | None = None
+        # Every SET with a TTL, so a test can see the lease being re-armed.
+        self.renewals: list[tuple[str, object, object]] = []
 
     async def set(self, key, value, nx=False, ex=None):
         if nx and self.held:
             return False
+        if not nx:
+            self.renewals.append((key, value, ex))
         self.held = True
         self.ttl = ex
         return True
@@ -386,6 +390,38 @@ class TestIllustrationDrainLoop:
 
         assert result["failed"] == 1
         assert result["skipped"] == 2
+
+    def test_rearms_the_lease_between_batches(self, monkeypatch, fake_redis):
+        """A free-provider batch can outlast a fixed TTL — one image a minute
+        makes twenty of them take half an hour — so the lock has to be renewed
+        per batch or it lapses mid-task and lets a second task run alongside."""
+        monkeypatch.setattr(settings, "ILLUSTRATION_SLEEP_SECONDS", 0.0)
+        calls = []
+
+        class Service:
+            async def process_batch(self, limit=None):
+                calls.append(limit)
+                if len(calls) <= 2:
+                    return {"generated": 20, "failed": 0, "skipped": 0}
+                return {"generated": 0, "failed": 0, "skipped": 0}
+
+        monkeypatch.setattr(
+            "app.worker.tasks.IllustrationService", lambda *a, **k: Service()
+        )
+        generate_illustrations_task.run()
+
+        renewals = [r for r in fake_redis.renewals if r[0] == "globelens:illustration:lock"]
+        # Two batches that generated, so the lease is re-armed after each; the
+        # third generated nothing and broke out without renewing.
+        assert len(renewals) == 2
+        assert all(r[2] == settings.ILLUSTRATION_LOCK_TTL_SECONDS for r in renewals)
+
+    def test_ttl_exceeds_a_single_batch_at_the_free_quota(self):
+        """Sanity check the lease against the slowest provider in play: a
+        free batch is ~20 images at about a minute each."""
+        per_image = settings.ILLUSTRATION_FREE_INTERVAL_SECONDS
+        batch_seconds = settings.ILLUSTRATION_BATCH_LIMIT * per_image
+        assert settings.ILLUSTRATION_LOCK_TTL_SECONDS > batch_seconds
 
 
 class TestPassLimitIsPlumbed:
