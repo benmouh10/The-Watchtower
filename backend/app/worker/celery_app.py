@@ -5,7 +5,9 @@ The worker and beat processes import `celery_app` from here. Broker and result
 backend default to the project's Redis (see settings.celery_broker), so enabling
 background jobs requires no additional configuration.
 
-Beat drives the newsletter cadence:
+Beat drives two cadences:
+  - event enrichment → every LLM_ENRICH_INTERVAL_MINUTES, which is what turns
+    DRAFT clustering placeholders into scored, summarised, publishable events
   - daily  brief   → every day at NEWSLETTER_DAILY_HOUR_UTC
   - weekly deep dive → NEWSLETTER_WEEKLY_DAY at NEWSLETTER_WEEKLY_HOUR_UTC
 """
@@ -31,6 +33,10 @@ celery_app.conf.update(
 )
 
 celery_app.conf.beat_schedule = {
+    "enrich-pending-events": {
+        "task": "app.worker.tasks.enrich_pending_events_task",
+        "schedule": float(settings.LLM_ENRICH_INTERVAL_MINUTES * 60),
+    },
     "newsletter-daily-brief": {
         "task": "app.worker.tasks.send_digest_task",
         "schedule": crontab(hour=settings.NEWSLETTER_DAILY_HOUR_UTC, minute=0),

@@ -25,6 +25,10 @@ volumes:
     driver: local
   elasticsearch_data:
     driver: local
+  # Generated illustrations: written by the worker, served by the API, so both
+  # must see the same directory.
+  media:
+    driver: local
 
 # ---------------------------------------------------------------------------
 # Networks — isolated internal network for inter-service communication
@@ -173,6 +177,10 @@ services:
       # `docker compose run --rm`, which otherwise deletes the log with
       # the container.
       - ./backend/logs:/app/logs
+      # Tests live outside app/; mounting them keeps the suite running on the
+      # container's dependencies instead of the host's Python.
+      - ./backend/tests:/app/tests
+      - media:/app/media
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     environment:
@@ -202,6 +210,8 @@ services:
       AZURE_EMBEDDING_API_KEY: ${AZURE_EMBEDDING_API_KEY:-}
       AZURE_EMBEDDING_ENDPOINT: ${AZURE_EMBEDDING_ENDPOINT:-}
       NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
+      POLLINATIONS_API_KEY: ${POLLINATIONS_API_KEY:-}
+      POLLINATIONS_API_URL: ${POLLINATIONS_API_URL:-https://gen.pollinations.ai/v1}
       NVIDIA_API_URL: ${NVIDIA_API_URL:-https://integrate.api.nvidia.com/v1}
       NVIDIA_LLM_MODEL: ${NVIDIA_LLM_MODEL:-nvidia/nemotron-3-super-120b-a12b}
       TAVILY_API_KEY: ${TAVILY_API_KEY:-}
@@ -211,7 +221,6 @@ services:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
       OLLAMA_LLM_MODEL: ${OLLAMA_LLM_MODEL:-qwen2.5-coder:14b}
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-bge-m3}
-
 
       # ── Embedding Model ──
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
@@ -287,6 +296,21 @@ services:
       VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:ops@globelens.ai}
       PUSH_TTL_SECONDS: ${PUSH_TTL_SECONDS:-3600}
       PUSH_DAILY_BRIEFING_HOUR_UTC: ${PUSH_DAILY_BRIEFING_HOUR_UTC:-8}
+      # ── Illustrations (generated event artwork) ──
+      # Billed per image, so this stays off until it is asked for. The worker
+      # needs the same values as the API to produce a matching file.
+      ILLUSTRATION_ENABLED: ${ILLUSTRATION_ENABLED:-false}
+      ILLUSTRATION_PROVIDER: ${ILLUSTRATION_PROVIDER:-local}
+      # Self-hosted endpoint, used when ILLUSTRATION_PROVIDER=local. Point this
+      # at a GPU box once the model lives somewhere other than this host.
+      ILLUSTRATION_LOCAL_BASE_URL: ${ILLUSTRATION_LOCAL_BASE_URL:-http://host.docker.internal:8001/v1}
+      ILLUSTRATION_MODEL: ${ILLUSTRATION_MODEL:-stabilityai/stable-diffusion-xl-base-1.0}
+      ILLUSTRATION_SIZE: ${ILLUSTRATION_SIZE:-1024x1024}
+      ILLUSTRATION_BATCH_LIMIT: ${ILLUSTRATION_BATCH_LIMIT:-20}
+      ILLUSTRATION_MIN_IMPORTANCE: ${ILLUSTRATION_MIN_IMPORTANCE:-5.0}
+      # The API serves these files from the same volume the worker writes.
+      ILLUSTRATION_STORAGE_DIR: ${ILLUSTRATION_STORAGE_DIR:-/app/media/illustrations}
+      ILLUSTRATION_URL_PREFIX: ${ILLUSTRATION_URL_PREFIX:-/media/illustrations}
     networks:
       - globelens_net
     # Backend only starts after all infrastructure services are healthy
@@ -364,6 +388,7 @@ services:
       - ./backend/alembic.ini:/app/alembic.ini
       - ./backend/alembic:/app/alembic
       - ./backend/logs:/app/logs
+      - media:/app/media
     environment:
       APP_ENV: ${APP_ENV:-development}
       SECRET_KEY: ${SECRET_KEY:-super_secret_dev_key_change_in_production}
@@ -382,9 +407,30 @@ services:
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-}
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-}
       VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
+      OLLAMA_LLM_MODEL: ${OLLAMA_LLM_MODEL:-qwen2.5-coder:14b}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GROK_API_KEY: ${GROK_API_KEY:-}
+      NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
+      POLLINATIONS_API_KEY: ${POLLINATIONS_API_KEY:-}
+      POLLINATIONS_API_URL: ${POLLINATIONS_API_URL:-https://gen.pollinations.ai/v1}
+      NVIDIA_API_URL: ${NVIDIA_API_URL:-https://integrate.api.nvidia.com/v1}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:ops@globelens.ai}
       PUSH_TTL_SECONDS: ${PUSH_TTL_SECONDS:-3600}
+      # ── Illustrations (generated event artwork) ──
+      # Billed per image, so this stays off until it is asked for. The worker
+      # needs the same values as the API to produce a matching file.
+      ILLUSTRATION_ENABLED: ${ILLUSTRATION_ENABLED:-false}
+      ILLUSTRATION_PROVIDER: ${ILLUSTRATION_PROVIDER:-local}
+      # Self-hosted endpoint, used when ILLUSTRATION_PROVIDER=local. Point this
+      # at a GPU box once the model lives somewhere other than this host.
+      ILLUSTRATION_LOCAL_BASE_URL: ${ILLUSTRATION_LOCAL_BASE_URL:-http://host.docker.internal:8001/v1}
+      ILLUSTRATION_MODEL: ${ILLUSTRATION_MODEL:-stabilityai/stable-diffusion-xl-base-1.0}
+      ILLUSTRATION_SIZE: ${ILLUSTRATION_SIZE:-1024x1024}
+      ILLUSTRATION_BATCH_LIMIT: ${ILLUSTRATION_BATCH_LIMIT:-20}
+      ILLUSTRATION_MIN_IMPORTANCE: ${ILLUSTRATION_MIN_IMPORTANCE:-5.0}
     networks:
       - globelens_net
     depends_on:
@@ -439,3 +485,4 @@ services:
         condition: service_healthy
     healthcheck:
       disable: true
+

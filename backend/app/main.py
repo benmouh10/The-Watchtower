@@ -33,6 +33,13 @@ from app.controllers.newsletter_controller import router as newsletter_router
 from app.controllers.push_controller import router as push_router
 from app.controllers.insights_controller import router as insights_router
 
+from pathlib import Path
+
+import structlog
+from fastapi.staticfiles import StaticFiles
+
+logger = structlog.get_logger()
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -144,6 +151,30 @@ app.include_router(chatbot_router,    prefix=f"{API_PREFIX}/chatbot",     tags=[
 app.include_router(newsletter_router, prefix=f"{API_PREFIX}/newsletter",  tags=["Newsletter"])
 app.include_router(push_router,       prefix=f"{API_PREFIX}/push",         tags=["Push Notifications"])
 app.include_router(insights_router,   prefix=f"{API_PREFIX}/insights",     tags=["Insights"])
+
+# ── Generated media ──────────────────────────────────────────────────────────
+# Illustrations are immutable files written by the worker into a mounted volume,
+# so they are served as static assets rather than through a controller: a public
+# file that never changes does not need a database read per request.
+#
+# Mounted after the API routers on purpose — a catch-all static mount placed
+# earlier would shadow /api/v1 and quietly break the whole API.
+_illustrations_root = Path(settings.ILLUSTRATION_STORAGE_DIR)
+try:
+    _illustrations_root.mkdir(parents=True, exist_ok=True)
+except OSError as _err:  # a read-only or missing volume must not stop the API
+    logger.warn("Illustration storage unavailable", path=str(_illustrations_root), error=str(_err))
+else:
+    app.mount(
+        settings.ILLUSTRATION_URL_PREFIX,
+        StaticFiles(directory=str(_illustrations_root)),
+        name="illustrations",
+    )
+    logger.info(
+        "Serving generated illustrations",
+        prefix=settings.ILLUSTRATION_URL_PREFIX,
+        directory=str(_illustrations_root),
+    )
 
 
 

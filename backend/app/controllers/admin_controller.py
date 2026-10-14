@@ -10,6 +10,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 from typing import Optional
 
 from app.controllers.auth_controller import get_current_user
+from app.core.config import settings
 from app.core.passwords import validate_password_strength
 from app.core.rbac import require_role
 from app.entities.models import User, UserRole
@@ -562,6 +563,47 @@ async def process_llm(
     llm_service = LLMService()
     background_tasks.add_task(llm_service.process_pending_events)
     return {"status": "llm_processing_initiated"}
+
+
+@router.post("/illustrate/process", status_code=status.HTTP_202_ACCEPTED, summary="Trigger batch illustration generation (ADMIN)")
+async def process_illustrations(
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    limit: int | None = None
+):
+    """
+    Generate artwork for events that do not have it yet.
+
+    Only users with the ADMIN role can execute this action. Runs in the
+    background because one image takes seconds and a batch takes minutes; the
+    service also enforces its own batch limit, so a generous ?limit cannot turn
+    one call into an unbounded bill.
+    """
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only administrators can trigger illustration generation"
+        )
+
+    from app.services.illustration_service import IllustrationService
+
+    service = IllustrationService()
+    if not settings.ILLUSTRATION_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Illustration generation is disabled (ILLUSTRATION_ENABLED is off)"
+        )
+    if not service.configured:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"No API key configured for illustration provider "
+                f"'{service.provider}'"
+            )
+        )
+
+    background_tasks.add_task(service.process_batch, limit)
+    return {"status": "illustration_processing_initiated", "provider": service.provider}
 
 
 @router.post("/search/sync", status_code=status.HTTP_202_ACCEPTED, summary="Trigger bulk search synchronization (ADMIN)")

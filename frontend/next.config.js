@@ -23,6 +23,13 @@ const nextConfig = {
         source: "/api/:path*",
         destination: `${internalApi}/api/:path*`,
       },
+      // Generated illustrations are served as static files by the same backend.
+      // The API returns them as a relative /media/... path, so the browser asks
+      // the Next.js origin for them; without this rewrite every image 404s.
+      {
+        source: "/media/:path*",
+        destination: `${internalApi}/media/:path*`,
+      },
     ];
   },
 

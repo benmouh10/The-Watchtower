@@ -29,6 +29,9 @@ import {
 } from "lucide-react";
 import PrimaryNav from "../../components/PrimaryNav";
 import ListenButton from "../../components/ListenButton";
+import EventIllustrationImage, {
+  EventIllustration,
+} from "../../components/EventIllustrationImage";
 import {
   getSavedEvent,
   isEventSaved,
@@ -96,6 +99,7 @@ interface EventDetail {
   updated_at?: string;
   articles: Article[];
   contradictions: Contradiction[];
+  illustration?: EventIllustration | null;
 }
 
 interface RelatedEvent {
@@ -1010,6 +1014,19 @@ export default function EventDetailPage() {
               </div>
             </div>
           </section>
+
+          {/* Event artwork. Placed under the metadata header so the attribution
+              caption reads as a credit rather than as part of the report body. */}
+          {event.illustration ? (
+            <div className="border-b border-outline-variant/40 pb-6">
+              <EventIllustrationImage
+                illustration={event.illustration}
+                variant="hero"
+                alt=""
+                className="max-h-[420px]"
+              />
+            </div>
+          ) : null}
 
           {/* Synthesized Body */}
           <div className="border-b border-outline-variant/40 pb-6">

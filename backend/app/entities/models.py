@@ -6,8 +6,8 @@ from typing import List, Optional
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
-    Boolean, CheckConstraint, DateTime, Enum, Float, ForeignKey, Integer,
-    String, Text, UniqueConstraint, func
+    BigInteger, Boolean, CheckConstraint, DateTime, Enum, Float, ForeignKey,
+    Integer, String, Text, UniqueConstraint, func
 )
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -68,6 +68,22 @@ class BiasLean(str, enum.Enum):
     CENTER       = "CENTER"
     CENTER_RIGHT = "CENTER_RIGHT"
     RIGHT        = "RIGHT"
+
+
+class IllustrationStatus(str, enum.Enum):
+    """Where a generated illustration has got to.
+
+    PENDING is written the moment an event is queued, so a row exists to retry
+    from and the frontend can tell "not generated yet" apart from "no
+    illustration was ever asked for". FAILED keeps the reason: image providers
+    fail for credit, quota and content-policy reasons, and an operator needs to
+    see which without digging through worker logs.
+    """
+    PENDING    = "PENDING"
+    GENERATING = "GENERATING"
+    READY      = "READY"
+    FAILED     = "FAILED"
+    SKIPPED    = "SKIPPED"
 
 
 # ── Source ────────────────────────────────────────────────────────────────────
@@ -149,6 +165,57 @@ class Event(Base):
         back_populates="event",
         cascade="all, delete-orphan",
     )
+    illustration: Mapped[Optional["Illustration"]] = relationship(
+        "Illustration",
+        back_populates="event",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+
+
+class Illustration(Base):
+    """A generated illustration for one event.
+
+    One row per event, holding both the artefact and the record of how it was
+    made: the prompt, the provider and model that ran, and the attribution line
+    shown to readers. The prompt and attribution are kept because a generated
+    image is only trustworthy as newsroom art if an editor can see afterwards
+    what it was asked to depict and which model produced it.
+
+    ``storage_key`` is a relative path under the media volume, never an absolute
+    one, so the same row survives the directory being mounted somewhere else in
+    a deployment.
+    """
+    __tablename__ = "illustrations"
+
+    id: Mapped[uuid.UUID]      = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    event_id: Mapped[uuid.UUID] = mapped_column(
+        # unique=True already creates the lookup index this column needs; adding
+        # index=True as well would only build a second, redundant one.
+        UUID(as_uuid=True), ForeignKey("events.id", ondelete="CASCADE"), unique=True
+    )
+    status: Mapped[IllustrationStatus] = mapped_column(
+        # String, not Enum: the table is created by hand-written SQL in the
+        # migration as VARCHAR(20), so an Enum column here would make every
+        # `alembic check` report drift. IllustrationStatus stays the vocabulary.
+        String(20), default=IllustrationStatus.PENDING.value, nullable=False, index=True
+    )
+    prompt: Mapped[Optional[str]] = mapped_column(Text)
+    negative_prompt: Mapped[Optional[str]] = mapped_column(Text)
+    provider: Mapped[Optional[str]]   = mapped_column(String(50))
+    model: Mapped[Optional[str]]      = mapped_column(String(120))
+    attribution: Mapped[Optional[str]] = mapped_column(String(255))
+    storage_key: Mapped[Optional[str]] = mapped_column(String(500))
+    content_type: Mapped[Optional[str]] = mapped_column(String(100))
+    byte_size: Mapped[Optional[int]]    = mapped_column(Integer)
+    width: Mapped[Optional[int]]        = mapped_column(Integer)
+    height: Mapped[Optional[int]]       = mapped_column(Integer)
+    seed: Mapped[Optional[int]]         = mapped_column(BigInteger)
+    failure_reason: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime]  = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime]  = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    event: Mapped["Event"] = relationship("Event", back_populates="illustration")
 
 
 # ── Article ───────────────────────────────────────────────────────────────────

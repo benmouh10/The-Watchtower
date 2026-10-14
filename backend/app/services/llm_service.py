@@ -666,6 +666,36 @@ class LLMService:
 
         return None
 
+    async def generate_text(
+        self,
+        system: str,
+        prompt: str,
+        max_tokens: int = 200,
+        temperature: float = 0.7,
+    ) -> str | None:
+        """One free-text completion from whichever provider is configured.
+
+        A minimal primitive for callers that want prose rather than one of the
+        structured schemas above — art direction for generated illustrations,
+        for instance. Returns None instead of raising, because every current
+        caller has a deterministic fallback and a provider hiccup should land on
+        that rather than fail the surrounding job.
+        """
+        try:
+            response = await self._client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+            return (response.choices[0].message.content or "").strip() or None
+        except Exception as err:
+            logger.warn("Text generation failed", error=str(err))
+            return None
+
     async def analyze_claim_credibility(self, text_content: str) -> FactCheckResponse:
         """
         Analyze the credibility of a scraped article or text claim.
@@ -823,12 +853,15 @@ class LLMService:
             )
             return fallback_response
 
-    async def process_pending_events(self) -> Tuple[int, int]:
+    async def process_pending_events(self, limit: int = 20) -> Tuple[int, int]:
         """
         Fetches unprocessed events, pulls their associated articles, calls analyze_event_cluster,
         and commits the intelligence data via EventRepository.
+
+        limit caps how many events one pass enriches, because each pass makes two
+        LLM calls per event and an unbounded query would hold a worker open.
         """
-        logger.info("Starting processing of pending events")
+        logger.info("Starting processing of pending events", limit=limit)
         processed_count = 0
         error_count = 0
 
@@ -837,7 +870,7 @@ class LLMService:
             article_repo = ArticleRepository(session)
 
             try:
-                events = await event_repo.get_unprocessed_events(limit=20)
+                events = await event_repo.get_unprocessed_events(limit=limit)
                 logger.info("Fetched unprocessed events for LLM synthesis", count=len(events))
 
                 for event in events:

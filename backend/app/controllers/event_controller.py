@@ -14,6 +14,7 @@ from app.core.rbac import require_role
 from app.controllers.auth_controller import bearer, get_current_user, resolve_listener
 from app.entities.models import Event, User, UserRole
 from app.services import audio_signing
+from app.services.illustration_service import illustration_payload
 
 
 def _role_of(user) -> str:
@@ -77,7 +78,7 @@ async def list_events(
     # Paginated PROCESSED events
     events_query = (
         base_query
-        .options(selectinload(Event.articles))
+        .options(selectinload(Event.articles), selectinload(Event.illustration))
         .order_by(Event.created_at.desc())
         .offset(offset)
         .limit(limit)
@@ -85,20 +86,7 @@ async def list_events(
     result = await db.execute(events_query)
     events = result.scalars().all()
     
-    event_list = []
-    for evt in events:
-        event_list.append({
-            "id": str(evt.id),
-            "title": evt.title,
-            "summary": evt.summary or "",
-            "topic": evt.topic or "WORLD",
-            "country": evt.country or "Unknown",
-            "latitude": evt.latitude,
-            "longitude": evt.longitude,
-            "importance_score": evt.importance_score,
-            "source_count": len(evt.articles),
-            "bias_lean": evt.bias_lean.name if evt.bias_lean else "CENTER"
-        })
+    event_list = [_serialize(evt) for evt in events]
         
     return {
         "events": event_list,
@@ -113,6 +101,10 @@ def _serialize(evt) -> dict:
 
     Kept in one place so /events, /latest, /trending, /country and /topic all
     return identical fields; they previously had four separate inline copies.
+
+    ``illustration`` is None until an image has actually been generated, which
+    keeps the field honest: the frontend can tell "no artwork yet" apart from an
+    artwork whose file has gone missing.
     """
     return {
         "id": str(evt.id),
@@ -126,6 +118,7 @@ def _serialize(evt) -> dict:
         "source_count": len(evt.articles),
         "bias_lean": evt.bias_lean.name if evt.bias_lean else "CENTER",
         "created_at": evt.created_at.isoformat() if evt.created_at else None,
+        "illustration": illustration_payload(evt.illustration),
     }
 
 
@@ -147,7 +140,7 @@ async def get_trending(
     result = await db.execute(
         select(Event)
         .where(Event.status == "PROCESSED")
-        .options(selectinload(Event.articles))
+        .options(selectinload(Event.articles), selectinload(Event.illustration))
         .order_by(Event.importance_score.desc().nullslast(), Event.created_at.desc())
         .limit(limit)
     )
@@ -168,7 +161,7 @@ async def get_latest(
     result = await db.execute(
         select(Event)
         .where(Event.status == "PROCESSED")
-        .options(selectinload(Event.articles))
+        .options(selectinload(Event.articles), selectinload(Event.illustration))
         .order_by(Event.created_at.desc())
         .limit(limit)
     )
@@ -190,7 +183,7 @@ async def get_map_events(db: AsyncSession = Depends(get_db)):
             Event.latitude.isnot(None),
             Event.longitude.isnot(None)
         )
-        .options(selectinload(Event.articles))
+        .options(selectinload(Event.articles), selectinload(Event.illustration))
     )
     events = result.scalars().all()
 
@@ -223,7 +216,7 @@ async def get_events_by_country(
     result = await db.execute(
         select(Event)
         .where(Event.status == "PROCESSED", func.lower(Event.country) == needle.lower())
-        .options(selectinload(Event.articles))
+        .options(selectinload(Event.articles), selectinload(Event.illustration))
         .order_by(Event.importance_score.desc().nullslast(), Event.created_at.desc())
         .limit(limit)
     )
@@ -254,7 +247,7 @@ async def get_events_by_topic(
     result = await db.execute(
         select(Event)
         .where(Event.status == "PROCESSED", func.lower(Event.topic) == needle.lower())
-        .options(selectinload(Event.articles))
+        .options(selectinload(Event.articles), selectinload(Event.illustration))
         .order_by(Event.importance_score.desc().nullslast(), Event.created_at.desc())
         .limit(limit)
     )
@@ -284,6 +277,7 @@ async def get_event(
         .options(
             selectinload(Event.articles).selectinload(Article.source),
             selectinload(Event.contradictions),
+            selectinload(Event.illustration),
         )
     )
     result = await db.execute(query)
@@ -345,6 +339,7 @@ async def get_event(
         "updated_at": evt.updated_at.isoformat() if evt.updated_at else None,
         "has_contradictions": len(contradictions) > 0,
         "contradictions": contradictions,
+        "illustration": illustration_payload(evt.illustration),
         "articles": articles_list
     }
 

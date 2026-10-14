@@ -28,6 +28,7 @@ import SearchBar from "./components/SearchBar";
 import PrimaryNav from "./components/PrimaryNav";
 import MapFilterPanel from "./components/MapFilterPanel";
 import ChatbotPanel from "./components/ChatbotPanel";
+import EventIllustrationImage, { EventIllustration } from "./components/EventIllustrationImage";
 
 
 // Dynamically import the Map component to prevent window undefined SSR issues
@@ -47,6 +48,7 @@ interface EventItem {
   source_count: number;
   bias_lean?: string;
   created_at?: string;
+  illustration?: EventIllustration | null;
 }
 
 export default function HomePage() {
@@ -515,6 +517,13 @@ export default function HomePage() {
                     className="bg-surface-container border border-outline-variant/60 rounded-lg p-5 flex flex-col justify-between h-full cursor-pointer hover:border-primary/60 hover:-translate-y-0.5 transition-all duration-200 shadow-sm"
                   >
                     <div>
+                      {evt.illustration ? (
+                        <EventIllustrationImage
+                          illustration={evt.illustration}
+                          className="h-40 mb-4"
+                        />
+                      ) : null}
+
                       <div className="flex justify-between items-start mb-3">
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-400 text-[10px] font-mono-data">
                           Score: {evt.importance_score.toFixed(1)}

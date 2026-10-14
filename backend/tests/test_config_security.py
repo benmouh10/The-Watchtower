@@ -36,7 +36,15 @@ class TestProductionSecretValidation:
         assert cfg.SECRET_KEY == key
 
     def test_development_tolerates_default_secret_key(self):
-        cfg = Settings(_env_file=None, APP_ENV="development")
+        # SECRET_KEY is passed explicitly on purpose: _env_file=None stops
+        # pydantic-settings reading .env, but it still reads the process
+        # environment, and the compose dev stack exports SECRET_KEY. Without this
+        # the assertion depends on where the suite happens to run.
+        cfg = Settings(
+            _env_file=None,
+            APP_ENV="development",
+            SECRET_KEY="CHANGE_ME_IN_PRODUCTION",
+        )
         assert cfg.SECRET_KEY == "CHANGE_ME_IN_PRODUCTION"
 
 

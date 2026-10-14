@@ -199,6 +199,107 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = "http://localhost:3000"
     API_PUBLIC_URL: str = "http://localhost:8000"
 
+    # ── Illustrations (generated event artwork) ───────────────────────────────
+    # Feeds the illustration column on events and GET /events, /latest, /trending.
+    #
+    # Generation is off by default and costs money per image, unlike narration:
+    # nothing here spends without ILLUSTRATION_ENABLED and a provider credential.
+    #
+    # "local" is the default: it is the only option that is both free and
+    # commercially safe, and it speaks the OpenAI-compatible
+    # /images/generations shape against any self-hosted server (diffusers,
+    # ComfyUI, vLLM-image, a rented GPU box).
+    #
+    # "nvidia" is deliberately NOT the default. The build catalog lists image
+    # NIMs, but its hosted catalog serves no image model at all
+    # (integrate.api.nvidia.com/v1/models returns 81 text/embedding/safety
+    # models and no FLUX or SDXL), /v1/images/generations there 404s, and the
+    # SDXL NIM page is marked deprecated. "openai" and "grok" speak the same
+    # shape on their own hosts but bill per image. A provider without
+    # credentials reports the event as FAILED with the reason rather than
+    # raising, so one missing key cannot stall a batch.
+    ILLUSTRATION_ENABLED: bool = False
+    ILLUSTRATION_PROVIDER: str = "local"       # "local" | "pollinations" | "openai" | "grok"
+    # SDXL base for a local server: permissive enough for a monetised site.
+    # FLUX.1-dev is cheaper per image on a paid host but carries a
+    # non-commercial restriction that follows the weights, including when you
+    # self-host them; FLUX.1-schnell is Apache-2.0 and the better swap if you
+    # want FLUX quality.
+    ILLUSTRATION_MODEL: str = "stabilityai/stable-diffusion-xl-base-1.0"
+    # Pollinations proxies many models behind one OpenAI-compatible endpoint and
+    # bills in "Pollen" credits, so zero-cost use depends on the chosen model
+    # being free and on their rates not changing. It is not a licensor: the
+    # upstream model's licence still governs the output, so pin an explicitly
+    # permissively-licensed model id rather than a bare alias like "flux".
+    POLLINATIONS_API_URL: str = "https://gen.pollinations.ai/v1"
+    POLLINATIONS_API_KEY: str = ""
+    # Where the self-hosted image server listens, used when PROVIDER=local.
+    # Docker Desktop resolves host.docker.internal to the Windows host; change to
+    # a service name once the model runs on a GPU box of its own.
+    ILLUSTRATION_LOCAL_BASE_URL: str = "http://host.docker.internal:8001/v1"
+    ILLUSTRATION_SIZE: str = "1024x1024"       # WIDTHxHEIGHT the provider renders
+    # 0 means "let the model decide". This matters: FLUX.1-schnell is distilled
+    # and wants ~4 steps, while SDXL wants ~30, so a single hardcoded value is
+    # wrong for whichever model you are not running. Set it to override.
+    ILLUSTRATION_STEPS: int = 0
+    ILLUSTRATION_GUIDANCE: float = 3.5         # prompt adherence; higher is more literal
+    ILLUSTRATION_TIMEOUT_SECONDS: int = 120
+    # Images are immutable once written, so the filename is derived from the
+    # content: regenerating an event replaces the file instead of accumulating
+    # new ones, and a browser that already cached the old URL keeps working.
+    ILLUSTRATION_STORAGE_DIR: str = "/app/media/illustrations"
+    # Public prefix the media directory is mounted under, used to build the URL
+    # handed to the frontend.
+    ILLUSTRATION_URL_PREFIX: str = "/media/illustrations"
+    # A batch is deliberately bounded: image generation is the slowest and most
+    # expensive stage in the pipeline, and an unbounded sweep over every event is
+    # how a pipeline run turns into a surprise bill.
+    ILLUSTRATION_BATCH_LIMIT: int = 20
+    # A row left in GENERATING by a killed worker is retried once it is this old.
+    # Without it a crash mid-batch strands that event's illustration permanently,
+    # because only a live worker can move a row out of GENERATING.
+    ILLUSTRATION_CLAIM_TIMEOUT_MINUTES: int = 15
+    # Events below this importance are not worth an image; they also make up the
+    # bulk of the table.
+    ILLUSTRATION_MIN_IMPORTANCE: float = 5.0
+    # Art direction is written by the configured LLM (Ollama by default, so this
+    # stays free) and kept verbatim, because the prompt is what an editor needs to
+    # see to judge the image.
+    ILLUSTRATION_PROMPT_MAX_CHARS: int = 400
+    ILLUSTRATION_ATTRIBUTION: str = "Generated image — not a photograph"
+    # Same reasoning as LLM_ENRICH_LOCK_TTL_SECONDS: the worker runs one
+    # process per core, so an unguarded backfill runs every batch in parallel and
+    # they all contend for the CPU-bound local LLM used to write prompts.
+    ILLUSTRATION_LOCK_TTL_SECONDS: int = 3600
+    # The task loops batches until nothing is generated, so a backfill is a
+    # single task rather than many racing each other. 12 batches of 20 covers
+    # the current backlog; the loop exits early when the queue drains.
+    ILLUSTRATION_MAX_BATCHES: int = 12
+    ILLUSTRATION_SLEEP_SECONDS: float = 2.0
+
+    # ── Event enrichment scheduling ───────────────────────────────────────────
+    # Clustering creates events as DRAFT with importance_score=0.0 as a
+    # placeholder; nothing but this job ever turns that into a real score, so
+    # without it every clustered event stays unscored and is filtered out of
+    # the API by its min_score threshold.
+    LLM_ENRICH_ENABLED: bool = True
+    LLM_ENRICH_INTERVAL_MINUTES: int = 10
+    # Events per pass. One pass per cycle is the safe default; the task loops
+    # when a backlog exists, so this sets throughput, not the total.
+    LLM_ENRICH_BATCH_SIZE: int = 20
+    # Ceiling on looped passes in a single run, so a large backlog cannot hold a
+    # worker forever. 159 events at batch 20 drains in 8 passes.
+    LLM_ENRICH_MAX_BATCHES: int = 10
+    # An event whose articles are all empty is skipped, not fixed. Without this
+    # the loop would spin on the same unprocessable rows until MAX_BATCHES.
+    LLM_ENRICH_SLEEP_SECONDS: float = 5.0
+    # Beat fires on an interval, but one pass can take far longer than that on a
+    # CPU-served model, so without a guard every tick stacks another run and the
+    # queue grows without bound: each extra concurrent run slows the shared
+    # inference endpoint, which lengthens the next pass. The lock makes the job
+    # self-regulating — a tick that finds the lock held is skipped.
+    LLM_ENRICH_LOCK_TTL_SECONDS: int = 3600
+
     # ── Newsletter scheduling ─────────────────────────────────────────────────
     NEWSLETTER_DAILY_TOP_N: int = 5
     NEWSLETTER_WEEKLY_TOP_N: int = 8

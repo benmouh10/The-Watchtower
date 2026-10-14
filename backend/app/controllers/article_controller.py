@@ -36,6 +36,7 @@ from app.core.database import get_db
 from app.entities.models import (
     Article,
     ArticleOrigin,
+    Event,
     ProcessingStatus,
     PublicationStatus,
     User,
@@ -43,6 +44,7 @@ from app.entities.models import (
 )
 from app.services.scraper_service import ScraperService
 from app.services import audio_signing
+from app.services.illustration_service import illustration_payload
 from app.services.tts_service import (
     TTSUnavailable,
     article_narration_text,
@@ -142,6 +144,11 @@ def _serialize(article: Article) -> dict:
             if source
             else None
         ),
+        # Artwork belongs to the event, so articles reuse it rather than paying
+        # for a second image of the same story.
+        "illustration": illustration_payload(
+            article.event.illustration if article.event else None
+        ),
     }
 
 
@@ -165,7 +172,7 @@ async def _load_article(db: AsyncSession, article_uuid: uuid.UUID) -> Optional[A
     result = await db.execute(
         select(Article)
         .where(Article.id == article_uuid)
-        .options(selectinload(Article.source), selectinload(Article.author))
+        .options(selectinload(Article.source), selectinload(Article.author), selectinload(Article.event).selectinload(Event.illustration))
     )
     return result.scalar_one_or_none()
 
@@ -181,7 +188,7 @@ async def list_my_articles(
     result = await db.execute(
         select(Article)
         .where(Article.author_id == current_user.id, Article.origin == ArticleOrigin.AUTHORED)
-        .options(selectinload(Article.author))
+        .options(selectinload(Article.author), selectinload(Article.event).selectinload(Event.illustration))
         .order_by(Article.created_at.desc())
     )
     return {"articles": [_serialize(a) for a in result.scalars().all()]}
@@ -201,7 +208,7 @@ async def list_authored_articles(
         Article.is_hidden.is_(False),
     )
     result = await db.execute(
-        base.options(selectinload(Article.author))
+        base.options(selectinload(Article.author), selectinload(Article.event).selectinload(Event.illustration))
         .order_by(Article.published_at.desc().nullslast(), Article.created_at.desc())
         .offset(offset)
         .limit(limit)

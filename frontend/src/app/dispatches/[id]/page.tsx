@@ -17,6 +17,9 @@ import {
 } from "lucide-react";
 import PrimaryNav from "../../components/PrimaryNav";
 import ListenButton from "../../components/ListenButton";
+import EventIllustrationImage, {
+  EventIllustration,
+} from "../../components/EventIllustrationImage";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const API = `${API_BASE_URL}/api/v1`;
@@ -30,6 +33,7 @@ interface Article {
   created_at: string | null;
   publication_status: string;
   author: { id: string; name: string } | null;
+  illustration?: EventIllustration | null;
 }
 
 interface CommentItem {
@@ -252,6 +256,18 @@ export default function DispatchDetailPage() {
             <h1 className="font-display-lg text-[26px] md:text-display-lg text-on-surface leading-tight font-bold">
               {article.title}
             </h1>
+
+            {/* Artwork belongs to the parent event, so it is inherited here
+                rather than generated per article. */}
+            {article.illustration ? (
+              <div className="mt-5">
+                <EventIllustrationImage
+                  illustration={article.illustration}
+                  variant="hero"
+                  className="max-h-[420px]"
+                />
+              </div>
+            ) : null}
 
             <div className="flex items-center gap-3 mt-4 pb-5 border-b border-outline-variant/60 flex-wrap">
               <span className="inline-flex items-center gap-1.5 text-[10px] text-zinc-400 font-mono-data uppercase tracking-wider">
