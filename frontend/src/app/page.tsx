@@ -36,6 +36,33 @@ const Map = dynamic(() => import("./components/Map"), { ssr: false });
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+type PageItem = number | "ellipsis";
+
+// Collapses a full page range into a short, scannable run: first page, a small
+// window around the active page, last page, and ellipses for the gaps
+// (e.g. 1 … 22 23 [24] 25 26 … 59). Renders every page verbatim when the range
+// is small enough that truncation would not save anything.
+function getPaginationItems(currentPage: number, totalPages: number): PageItem[] {
+  const window = 2;
+  const pages = new Set<number>();
+
+  for (let p = currentPage - window; p <= currentPage + window; p++) {
+    if (p >= 1 && p <= totalPages) pages.add(p);
+  }
+  pages.add(1);
+  pages.add(totalPages);
+
+  const sorted = Array.from(pages).sort((a, b) => a - b);
+  const items: PageItem[] = [];
+  let prev = 0;
+  for (const p of sorted) {
+    if (prev && p - prev > 1) items.push("ellipsis");
+    items.push(p);
+    prev = p;
+  }
+  return items;
+}
+
 interface EventItem {
   id: string;
   title: string;
@@ -427,7 +454,7 @@ export default function HomePage() {
           <div className="flex-grow flex w-full max-w-container-max-width mx-auto relative px-margin-mobile md:px-margin-desktop py-stack-lg">
             
             {/* Primary Feed Column */}
-            <main className="flex-grow w-full lg:w-3/4 pr-0 lg:pr-gutter pb-32 flex flex-col gap-stack-lg z-10">
+            <main className="flex-grow w-full lg:w-3/4 pr-0 lg:pr-gutter pb-32 flex flex-col gap-stack-lg z-10 min-w-0">
               
               {/* Topic Onboarding Widget */}
               <section className="glass-panel p-stack-md md:p-gutter rounded-lg relative overflow-hidden group border border-outline-variant/60">
@@ -557,31 +584,44 @@ export default function HomePage() {
 
               {/* Pagination Controls */}
               {totalPages > 1 && (
-                <div className="flex justify-center mt-stack-md gap-2 items-center">
+                <div className="flex flex-wrap items-center justify-center gap-2 mt-stack-md">
                   <button 
                     disabled={currentPage === 1}
                     onClick={() => fetchEvents(currentPage - 1)}
                     className="w-8 h-8 flex items-center justify-center rounded border border-outline-variant text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors disabled:opacity-30"
+                    aria-label="Previous page"
                   >
                     ‹
                   </button>
-                  {Array.from({ length: totalPages }).map((_, idx) => (
-                    <button 
-                      key={idx}
-                      onClick={() => fetchEvents(idx + 1)}
-                      className={`w-8 h-8 flex items-center justify-center rounded font-mono-data text-xs transition-colors ${
-                        currentPage === idx + 1 
-                          ? "bg-primary text-on-primary font-bold" 
-                          : "border border-outline-variant text-on-surface-variant hover:bg-surface-container hover:text-on-surface"
-                      }`}
-                    >
-                      {idx + 1}
-                    </button>
-                  ))}
+                  {getPaginationItems(currentPage, totalPages).map((item, idx) =>
+                    item === "ellipsis" ? (
+                      <span
+                        key={`ellipsis-${idx}`}
+                        className="w-8 h-8 flex items-center justify-center text-on-surface-variant select-none"
+                        aria-hidden="true"
+                      >
+                        …
+                      </span>
+                    ) : (
+                      <button 
+                        key={item}
+                        onClick={() => fetchEvents(item)}
+                        aria-current={currentPage === item ? "page" : undefined}
+                        className={`w-8 h-8 flex items-center justify-center rounded font-mono-data text-xs transition-colors ${
+                          currentPage === item 
+                            ? "bg-primary text-on-primary font-bold" 
+                            : "border border-outline-variant text-on-surface-variant hover:bg-surface-container hover:text-on-surface"
+                        }`}
+                      >
+                        {item}
+                      </button>
+                    )
+                  )}
                   <button 
                     disabled={currentPage === totalPages}
                     onClick={() => fetchEvents(currentPage + 1)}
                     className="w-8 h-8 flex items-center justify-center rounded border border-outline-variant text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors disabled:opacity-30"
+                    aria-label="Next page"
                   >
                     ›
                   </button>
