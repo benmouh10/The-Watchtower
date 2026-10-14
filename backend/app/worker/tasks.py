@@ -28,6 +28,33 @@ _ENRICH_LOCK_KEY = "globelens:llm_enrich:lock"
 # enrichment for prompt composition.
 _ILLUSTRATION_LOCK_KEY = "globelens:illustration:lock"
 
+# The loop every task in this process runs on, created on first use.
+_PROCESS_LOOP: asyncio.AbstractEventLoop | None = None
+
+
+def _run_in_process_loop(coroutine) -> object:
+    """Run a coroutine to completion on a loop that outlives the task.
+
+    asyncio.run() builds a fresh loop per call and closes it on the way out,
+    which is fine for a script and wrong here. The async engine is module-level
+    and the asyncpg connections it pools are bound to the loop that opened them,
+    so with a fresh loop the second task in a worker process was handed a
+    connection whose loop had already been closed and died with "attached to a
+    different loop". That first showed up when beat began scheduling artwork
+    alongside enrichment: whichever ran second failed.
+
+    One loop for the life of the process keeps the pool valid. The tasks are
+    synchronous and single-threaded inside a Celery child, so nothing else is
+    waiting on this loop concurrently.
+    """
+    global _PROCESS_LOOP
+    if _PROCESS_LOOP is None or _PROCESS_LOOP.is_closed():
+        _PROCESS_LOOP = asyncio.new_event_loop()
+    # Anything reaching for get_event_loop() outside a running coroutine should
+    # find this one rather than constructing a rival.
+    asyncio.set_event_loop(_PROCESS_LOOP)
+    return _PROCESS_LOOP.run_until_complete(coroutine)
+
 
 @celery_app.task(name="app.worker.tasks.send_digest_task")
 def send_digest_task(frequency: str = "daily") -> dict:
@@ -37,7 +64,7 @@ def send_digest_task(frequency: str = "daily") -> dict:
         async with AsyncSessionFactory() as db:
             return await send_digest(db, frequency)
 
-    result = asyncio.run(_run())
+    result = _run_in_process_loop(_run())
     logger.info("Digest task finished: %s", result)
     return result
 
@@ -50,7 +77,7 @@ def send_push_briefings_task() -> dict:
         async with AsyncSessionFactory() as db:
             return await send_daily_briefings(db)
 
-    result = asyncio.run(_run())
+    result = _run_in_process_loop(_run())
     logger.info("Push briefing task finished: %s", result)
     return result
 
@@ -130,7 +157,7 @@ def enrich_pending_events_task() -> dict:
             finally:
                 await releaser.aclose()
 
-    result = asyncio.run(_run())
+    result = _run_in_process_loop(_run())
     logger.info("Event enrichment task finished: %s", result)
     return result
 
@@ -224,6 +251,6 @@ def generate_illustrations_task(
             finally:
                 await releaser.aclose()
 
-    result = asyncio.run(_run())
+    result = _run_in_process_loop(_run())
     logger.info("Illustration task finished: %s", result)
     return result

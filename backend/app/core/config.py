@@ -285,6 +285,13 @@ class Settings(BaseSettings):
     ILLUSTRATION_FREE_INTERVAL_SECONDS: float = 62.0
     ILLUSTRATION_FREE_MAX_WAIT_SECONDS: float = 300.0
 
+    # How often beat re-checks for enriched events with no artwork. Nothing else
+    # triggers generation — without this, an event that finishes enrichment would
+    # stay imageless until someone enqueued a batch by hand, which is how the
+    # first 331 got made. The task stops itself when nothing is eligible, so a
+    # quiet period costs one query.
+    ILLUSTRATION_INTERVAL_MINUTES: int = 15
+
     # ── Event enrichment scheduling ───────────────────────────────────────────
     # Clustering creates events as DRAFT with importance_score=0.0 as a
     # placeholder; nothing but this job ever turns that into a real score, so

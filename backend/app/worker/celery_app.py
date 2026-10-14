@@ -5,11 +5,14 @@ The worker and beat processes import `celery_app` from here. Broker and result
 backend default to the project's Redis (see settings.celery_broker), so enabling
 background jobs requires no additional configuration.
 
-Beat drives two cadences:
+Beat drives these cadences:
   - event enrichment → every LLM_ENRICH_INTERVAL_MINUTES, which is what turns
     DRAFT clustering placeholders into scored, summarised, publishable events
+  - event artwork → every ILLUSTRATION_INTERVAL_MINUTES, so an event that has
+    just been enriched gets an image without anyone triggering it by hand
   - daily  brief   → every day at NEWSLETTER_DAILY_HOUR_UTC
   - weekly deep dive → NEWSLETTER_WEEKLY_DAY at NEWSLETTER_WEEKLY_HOUR_UTC
+  - push briefing  → every day at PUSH_DAILY_BRIEFING_HOUR_UTC
 """
 from celery import Celery
 from celery.schedules import crontab
@@ -36,6 +39,14 @@ celery_app.conf.beat_schedule = {
     "enrich-pending-events": {
         "task": "app.worker.tasks.enrich_pending_events_task",
         "schedule": float(settings.LLM_ENRICH_INTERVAL_MINUTES * 60),
+    },
+    # Artwork for events enriched since the last pass. The task drains what it
+    # finds and stops itself when a batch generates nothing, so this is a
+    # re-check rather than a workload — and the Redis lock means a run still in
+    # progress is skipped instead of doubling up.
+    "illustrate-new-events": {
+        "task": "app.worker.tasks.generate_illustrations_task",
+        "schedule": float(settings.ILLUSTRATION_INTERVAL_MINUTES * 60),
     },
     "newsletter-daily-brief": {
         "task": "app.worker.tasks.send_digest_task",

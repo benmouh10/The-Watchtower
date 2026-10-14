@@ -10,10 +10,14 @@ These tests pin the wiring rather than the LLM: that beat schedules the task,
 that the task is registered, and that the loop drains a backlog and stops
 instead of spinning on unprocessable rows.
 """
+import asyncio
+from pathlib import Path
+
 import pytest
 
 from app.core.config import settings
 from app.worker import celery_app as celery_module
+from app.worker import tasks as worker_tasks
 from app.worker.tasks import enrich_pending_events_task, generate_illustrations_task
 
 
@@ -71,6 +75,42 @@ class TestBeatSchedule:
     def test_interval_comes_from_settings(self):
         entry = celery_module.celery_app.conf.beat_schedule["enrich-pending-events"]
         assert entry["schedule"] == float(settings.LLM_ENRICH_INTERVAL_MINUTES * 60)
+
+
+class TestIllustrationSchedule:
+    """Without this entry nothing ever generates an image: enrichment finishes,
+    and the artwork waits until someone hands-enqueues a batch."""
+
+    def test_artwork_is_scheduled(self):
+        schedule = celery_module.celery_app.conf.beat_schedule
+        assert "illustrate-new-events" in schedule
+
+    def test_entry_points_at_the_drain_task(self):
+        entry = celery_module.celery_app.conf.beat_schedule["illustrate-new-events"]
+        assert entry["task"] == "app.worker.tasks.generate_illustrations_task"
+
+    def test_interval_comes_from_settings(self):
+        entry = celery_module.celery_app.conf.beat_schedule["illustrate-new-events"]
+        assert entry["schedule"] == float(settings.ILLUSTRATION_INTERVAL_MINUTES * 60)
+
+    def test_interval_is_positive(self):
+        assert settings.ILLUSTRATION_INTERVAL_MINUTES > 0
+
+    def test_task_is_registered(self):
+        assert "app.worker.tasks.generate_illustrations_task" in celery_module.celery_app.tasks
+
+    def test_disabled_settings_still_exits_the_loop(self, monkeypatch):
+        """A scheduled run with the provider switched off must settle in one
+        pass rather than re-arming every interval. The service returns a zero
+        tally when disabled, so the drain loop breaks without touching the
+        provider — assert that rather than letting it reach a real one."""
+        monkeypatch.setattr(settings, "ILLUSTRATION_ENABLED", False)
+        result = generate_illustrations_task.run()
+        assert result["generated"] == 0
+        assert result["batches"] == 1
+        # The key only appears on the skip path, so its absence proves the task
+        # actually ran rather than bailing out at the lock.
+        assert "already_running" not in result
 
     def test_existing_schedules_survived(self):
         schedule = celery_module.celery_app.conf.beat_schedule
@@ -435,3 +475,58 @@ class TestPassLimitIsPlumbed:
         sig = inspect.signature(LLMService.process_pending_events)
         assert "limit" in sig.parameters
         assert sig.parameters["limit"].default == 20
+
+
+class TestProcessLoop:
+    """Every task used to call asyncio.run(), which builds a loop per call and
+    closes it on exit. The async engine is module-level and its pooled asyncpg
+    connections belong to the loop that opened them, so the second task in a
+    worker process got a connection from a dead loop and failed with "attached
+    to a different loop". Beat scheduling artwork alongside enrichment is what
+    made two different tasks share a process."""
+
+    def test_reuses_one_loop_across_calls(self):
+        seen = []
+
+        async def probe():
+            seen.append(asyncio.get_running_loop())
+
+        worker_tasks._run_in_process_loop(probe())
+        worker_tasks._run_in_process_loop(probe())
+
+        assert len(seen) == 2
+        assert seen[0] is seen[1]
+
+    def test_a_failed_task_leaves_the_loop_usable(self):
+        """A provider outage must not cost every later task in the process its
+        loop — that would turn one transient failure into a broken worker."""
+
+        async def boom():
+            raise ValueError("provider down")
+
+        with pytest.raises(ValueError):
+            worker_tasks._run_in_process_loop(boom())
+
+        async def probe():
+            return asyncio.get_running_loop()
+
+        loop = worker_tasks._run_in_process_loop(probe())
+        assert loop is worker_tasks._PROCESS_LOOP
+        assert not loop.is_closed()
+
+    def test_no_task_builds_its_own_loop(self):
+        """Pinned as an AST check rather than a text one: asyncio.run() is
+        still mentioned in comments explaining why it is not used."""
+        import ast
+
+        tree = ast.parse(Path(worker_tasks.__file__).read_text(encoding="utf-8"))
+        offenders = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "run"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "asyncio"
+        ]
+        assert offenders == []
