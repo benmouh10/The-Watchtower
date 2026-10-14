@@ -1,6 +1,6 @@
 {
-  "name": "GlobeLens AI — News Intelligence",
-  "short_name": "GlobeLens",
+  "name": "The Watchtower — News Intelligence",
+  "short_name": "The Watchtower",
   "description": "Multi-source news synthesis, bias detection and geo-tagged events.",
   "start_url": "/",
   "scope": "/",

@@ -25,12 +25,12 @@ function spiralArm(startAngle: number, turns: number, r0: number, b: number, ste
   return pts.join(" ")
 }
 
-interface GlobelensLogoProps {
+interface WatchtowerLogoProps {
   size?: number | string
   hideWordmark?: boolean
 }
 
-export default function GlobelensLogo({ size = "min(80vw,520px)", hideWordmark = false }: GlobelensLogoProps) {
+export default function WatchtowerLogo({ size = "min(80vw,520px)", hideWordmark = false }: WatchtowerLogoProps) {
   const petalAngles = useMemo(
     () => Array.from({ length: PETALS }, (_, i) => (360 / PETALS) * i),
     [],
@@ -102,7 +102,7 @@ export default function GlobelensLogo({ size = "min(80vw,520px)", hideWordmark =
             filter: "drop-shadow(0 0 30px rgba(45,212,191,0.25))",
           }}
           role="img"
-          aria-label="GLOBELENS AI animated emblem"
+          aria-label="THE WATCHTOWER animated emblem"
         >
           <defs>
             <radialGradient id="gl-coreGlow" cx="50%" cy="50%" r="50%">
@@ -233,7 +233,7 @@ export default function GlobelensLogo({ size = "min(80vw,520px)", hideWordmark =
                 margin: 0,
               }}
             >
-              GLOBELENS AI
+              THE WATCHTOWER
             </h1>
             <p
               style={{

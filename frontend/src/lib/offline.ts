@@ -8,7 +8,7 @@
  * dossier available without a connection, possibly without being signed in at
  * all. So the snapshot lives in IndexedDB and never leaves the browser.
  *
- * A snapshot is a frozen copy. GlobeLens refuses to serve cached news as if it
+ * A snapshot is a frozen copy. The Watchtower refuses to serve cached news as if it
  * were live, so every surface that reads from here must label the copy with the
  * time it was saved rather than presenting it as current.
  */
@@ -64,7 +64,7 @@ export interface SavedEvent {
   event: OfflineEvent;
 }
 
-const DB_NAME = "globelens-offline";
+const DB_NAME = "watchtower-offline";
 const DB_VERSION = 1;
 const STORE = "saved-events";
 

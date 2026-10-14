@@ -40,7 +40,7 @@ const Map = dynamic(() => import("../../components/Map"), { ssr: false });
 
 // API Client configuration
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-import GlobelensLogo from "../../components/GlobelensLogo";
+import WatchtowerLogo from "../../components/WatchtowerLogo";
 
 
 interface HealthState {
@@ -1105,7 +1105,7 @@ export default function AdminDashboardPage() {
           {/* Top Navbar Skeleton */}
           <nav className="flex justify-between items-center px-margin-desktop w-full h-16 bg-[#080c16]/80 border-b border-indigo-950/40 z-20">
             <div className="flex items-center gap-8">
-              <span className="font-extrabold text-lg text-cyber-cyan drop-shadow-[0_0_10px_rgba(6,182,212,0.4)]">GlobeLens AI</span>
+              <span className="font-extrabold text-lg text-cyber-cyan drop-shadow-[0_0_10px_rgba(6,182,212,0.4)]">The Watchtower</span>
               <div className="hidden md:flex items-center gap-6">
                 <span className="text-cyber-indigo font-bold border-b-2 border-cyber-indigo pb-1 text-xs uppercase tracking-wider font-mono-data">
                   Pipeline Ingestion Active
