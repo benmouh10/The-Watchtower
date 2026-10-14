@@ -74,8 +74,8 @@ curl -X POST /api/v1/admin/llm/process    -H "Authorization: Bearer $ADMIN_TOKEN
 ## Getting started
 
 ```bash
-git clone https://github.com/benmouh10/GlobeLens_AI.git
-cd GlobeLens_AI
+git clone https://github.com/benmouh10/The-Watchtower.git
+cd The-Watchtower
 
 cp .env.example .env      # then fill in the API keys you need
 docker compose up --build
