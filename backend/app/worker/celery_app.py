@@ -76,5 +76,9 @@ celery_app.conf.beat_schedule = {
     },
 }
 
-# Ensures app.worker.tasks is imported when the worker starts.
+# Ensures app.worker.tasks + app.worker.threat_tasks are imported when the
+# worker starts. autodiscover's default related_name is "tasks", so the Threat
+# Lens module must be imported explicitly or its task never registers and every
+# telemetry message dies with a KeyError at the consumer.
 celery_app.autodiscover_tasks(["app.worker"])
+import app.worker.threat_tasks  # noqa: E402  (registers analyze_telemetry_task)
