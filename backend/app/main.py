@@ -17,6 +17,7 @@ from app.core.logging import configure_logging
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.middleware.selective_gzip import SelectiveGZipMiddleware
+from app.middleware.threat_lens import ThreatLensMiddleware
 
 # ── Controller (Router) imports ───────────────────────────────────────────────
 from app.controllers.auth_controller import router as auth_router
@@ -120,6 +121,10 @@ app = FastAPI(
 # Order matters: added last is outermost. Rate limiting is added first so CORS
 # wraps it and 429 responses still carry CORS headers for browser clients.
 app.add_middleware(RateLimitMiddleware)
+# Threat Lens sits outside the rate limiter (a blocked identity is declined
+# before it can spend rate-limit budget) but inside CORS so its 403s still
+# carry CORS headers for browser clients. Inert while THREAT_LENS_ENABLED=false.
+app.add_middleware(ThreatLensMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
