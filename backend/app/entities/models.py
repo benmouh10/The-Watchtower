@@ -86,6 +86,47 @@ class IllustrationStatus(str, enum.Enum):
     SKIPPED    = "SKIPPED"
 
 
+class BlockSource(str, enum.Enum):
+    """Who decided an IP is blocked.
+
+    THREAT_LENS is the anomaly scorer (the S5 innovation). MANUAL is the
+    operator escape hatch, filled by hand so an admin can block an IP the model
+    never flagged.
+    """
+    THREAT_LENS = "THREAT_LENS"
+    MANUAL      = "MANUAL"
+
+
+# ── BlockedIp ─────────────────────────────────────────────────────────────────
+class BlockedIp(Base):
+    """A network identity blocked by the Threat Lens worker (or an operator).
+
+    The Redis block marker is what the middleware actually consults on every
+    request (lookup-free and TTL'd); this table is the durable record of a
+    block so it survives a Redis flush, shows up in ops queries, and can be
+    listed/revoked from the admin panel. One row per IP, upserted when a block
+    is re-issued.
+
+    ``source`` is a String to mirror how Illustration.status is stored — the
+    table is created by hand-written SQL (VARCHAR), and an Enum column here
+    would make every `alembic check` report drift.
+    """
+    __tablename__ = "blocked_ips"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    ip: Mapped[str] = mapped_column(String(45), unique=True, index=True, nullable=False)
+    source: Mapped[str] = mapped_column(
+        String(20),
+        default=BlockSource.THREAT_LENS.value,
+        server_default=BlockSource.THREAT_LENS.value,
+        nullable=False,
+    )
+    reason: Mapped[Optional[str]] = mapped_column(Text)
+    risk_score: Mapped[Optional[float]] = mapped_column(Float)
+    blocked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
 # ── Source ────────────────────────────────────────────────────────────────────
 class Source(Base):
     """Models media publishers (BBC, CNN, Al Jazeera, etc.)."""

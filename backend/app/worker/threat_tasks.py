@@ -22,8 +22,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import func
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core.config import settings
+from app.core.database import AsyncSessionFactory
+from app.entities.models import BlockedIp, BlockSource
 from app.services import threat_lens as tl
 from app.services.cache_service import cache_service
 from app.worker.celery_app import celery_app
@@ -83,6 +89,41 @@ async def _push_anomaly_flag(identity: str, anomalous: bool) -> list[str]:
     return await client.lrange(key, 0, -1)
 
 
+async def _record_block(identity: str, reason: str, risk: float) -> None:
+    """Upsert the durable blocked_ips row for a block decision.
+
+    The Redis marker enforces the 403; this row is the audit record that
+    survives a Redis flush and shows up in ops queries. Errors are swallowed —
+    a persistence hiccup must not fail the task's enforcement side.
+    """
+    try:
+        expires_at = datetime.now(timezone.utc) + timedelta(
+            seconds=settings.THREAT_LENS_BLOCK_TTL_SECONDS
+        )
+        stmt = pg_insert(BlockedIp).values(
+            ip=identity,
+            source=BlockSource.THREAT_LENS.value,
+            reason=reason,
+            risk_score=risk,
+            expires_at=expires_at,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[BlockedIp.ip],
+            set_={
+                "source": stmt.excluded.source,
+                "reason": stmt.excluded.reason,
+                "risk_score": stmt.excluded.risk_score,
+                "expires_at": stmt.excluded.expires_at,
+                "blocked_at": func.now(),
+            },
+        )
+        async with AsyncSessionFactory() as db:
+            await db.execute(stmt)
+            await db.commit()
+    except Exception:
+        logger.exception("Threat Lens block row persistence failed; enforceable state kept in Redis")
+
+
 @celery_app.task(name="app.worker.threat_tasks.analyze_telemetry_task")
 def analyze_telemetry_task(payload: dict) -> dict:
     """Score one request's telemetry and block the identity if its window trips.
@@ -120,8 +161,7 @@ def analyze_telemetry_task(payload: dict) -> dict:
 
     reason = f"anomalous_x{anomaly_hits}_risk_{risk:.2f}"
     _run_in_process_loop(tl.block_identity(identity, reason))
-    # The persistent blocked_ips row is written by a task layered on in the
-    # migration step; Redis block marker + feed already enforce the 403.
+    _run_in_process_loop(_record_block(identity, reason, risk))
     return {
         "identity": identity,
         "risk": risk,
