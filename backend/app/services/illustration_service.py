@@ -54,13 +54,19 @@ _SIGNATURES: Tuple[Tuple[bytes, str], ...] = (
     (b"BM", "image/bmp"),
 )
 
-# Appended to every prompt. Diffusion models will happily render garbled
-# lettering when asked for text, and a news illustration covered in fake
-# headlines is worse than no illustration, so text and logos are refused
-# explicitly rather than left to chance.
+# Appended to every prompt, after the art direction and before the aspect
+# clause. Diffusion models will happily render garbled lettering when asked for
+# text, and a news illustration covered in fake headlines is worse than no
+# illustration, so text and logos are refused explicitly rather than left to
+# chance. Real people are refused too: a generated picture of a named official
+# is a fabrication of something that was never photographed.
+#
+# It carries no positive style instruction on purpose. The art direction the
+# model writes supplies the palette, light and mood per story; a house look
+# stacked on top of that is what makes three hundred images look like one.
 _STYLE_SUFFIX = (
-    "editorial illustration, restrained muted palette, flat vector shapes, "
-    "subtle grain, no text, no lettering, no numbers, no logos, no watermarks, "
+    "editorial news illustration, not a photograph, "
+    "no text, no lettering, no numbers, no logos, no watermarks, "
     "no flags, no recognisable public figures"
 )
 
@@ -297,6 +303,13 @@ class IllustrationService:
         The model is asked for a scene, not a description of the headline: naming
         real people or reproducing a headline verbatim produces an unusable
         image and, in the case of real people, a misleading one.
+
+        It is given the enriched summary rather than just the headline because
+        that summary is the analysis — the entities, the cause and the stake of
+        the story — and it is what separates "a war" from a picture of the thing
+        the war is actually about. Asked for one short line it returned a
+        preamble and a paragraph about symbolism; asked for a specified
+        structure of concrete detail it describes objects instead.
         """
         fallback = build_fallback_prompt(title, topic, country)
         try:
@@ -311,20 +324,40 @@ class IllustrationService:
 
             raw = await llm.generate_text(
                 system=(
-                    "You are an art director for an international news outlet. Given a news "
-                    "story, reply with one short line of art direction for an abstract "
-                    "editorial illustration: a scene, mood and colour palette that evoke the "
-                    "subject. Never name or depict real people, never quote the headline, "
-                    "never ask for text or lettering in the image, and never state that it "
-                    "is a photograph. Reply with the line only."
+                    "You are an art director at an international news magazine. "
+                    "You are given the headline, topic, country and the written "
+                    "analysis of a news event. Read the analysis first: it holds "
+                    "the objects, the cause and the stake of the story, and it "
+                    "is what you illustrate.\n\n"
+                    "From it choose the single most telling visual idea and "
+                    "describe the picture that would carry it, as one line of "
+                    "45 to 70 words containing: the scene and its setting; two "
+                    "or three concrete objects or details taken from the "
+                    "analysis; the light and the colour palette; and the mood. "
+                    "Ground every element in something the analysis actually "
+                    "says rather than illustrating the topic in general.\n\n"
+                    "Refuse, without exception: any real person by name or by "
+                    "face; any flag, logo or brand; and any writing of any "
+                    "kind. Never describe an object that carries writing - a "
+                    "sign, banner, placard, poster, screen, newspaper, book or "
+                    "headline - because the picture is to contain no lettering "
+                    "at all. People may appear only as silhouettes, from "
+                    "behind, or at a distance; no close-up faces. Never state "
+                    "that it is a photograph. Do not open with a label such as "
+                    "'Illustration:' or 'Abstract editorial illustration:' - "
+                    "begin with the scene itself. Reply with that one line and "
+                    "nothing else, in English."
                 ),
                 prompt=(
                     f"Headline: {title}\n"
                     f"Topic: {topic or 'world news'}\n"
                     f"Country: {country or 'unspecified'}\n"
-                    f"Summary: {(summary or '')[:600]}"
+                    f"Analysis: {(summary or '')[:1500]}"
                 ),
-                max_tokens=120,
+                # A 70-word line is ~450 characters, well past 120 tokens; the
+                # old limit cut the description off in the middle of its
+                # palette.
+                max_tokens=300,
                 temperature=0.6,
             )
         except Exception as err:  # a prompt failure must not fail the image
@@ -336,14 +369,17 @@ class IllustrationService:
         # single word makes a worse prompt than the template does.
         if len(cleaned) < 25 or cleaned.lower().startswith(("i cannot", "i can't", "sorry", "as an ai")):
             cleaned = fallback
-        # Both branches are bounded here rather than at the source: the template
-        # is built from three fields and would otherwise overrun the limit too.
-        return sanitize_prompt(f"{cleaned}, {_ASPECT_BY_SHAPE['wide']}", settings.ILLUSTRATION_PROMPT_MAX_CHARS)
+        # The description is clipped to its budget on its own, then the fixed
+        # clauses are appended after it. Clipping the assembled string instead
+        # would drop those clauses off the end whenever the model was verbose,
+        # which is precisely when the negatives are most needed.
+        body = sanitize_prompt(cleaned, self._prompt_budget())
+        return f"{body}, {_STYLE_SUFFIX}, {_ASPECT_BY_SHAPE['wide']}"
 
     @staticmethod
     def _prompt_budget() -> int:
-        """Room left for art direction once the aspect clause is accounted for."""
-        suffix = len(_ASPECT_BY_SHAPE["wide"]) + 2  # ", " separator
+        """Room left for the scene description once the fixed clauses are added."""
+        suffix = 2 + len(_STYLE_SUFFIX) + 2 + len(_ASPECT_BY_SHAPE["wide"])
         return max(settings.ILLUSTRATION_PROMPT_MAX_CHARS - suffix, 60)
 
     async def request_image(self, prompt: str) -> Tuple[bytes, Optional[int]]:
@@ -446,11 +482,22 @@ class IllustrationService:
 
                 # 402 with no body is the quota, not a payment problem, so it is
                 # retried after the refill interval instead of failing the event.
-                if response.status_code in (402, 429):
+                # 5xx is treated the same way. The host answers 200 five times in
+                # a row when left alone and 500s only appeared when two clients
+                # hit it together, so a 500 here means "not now" rather than "not
+                # ever" — and the wait is the full refill interval, so a broken
+                # prompt cannot turn into a tight loop against a dead endpoint.
+                quota = response.status_code in (402, 429)
+                if quota or 500 <= response.status_code <= 599:
                     if time.monotonic() >= deadline:
+                        waited = settings.ILLUSTRATION_FREE_MAX_WAIT_SECONDS
+                        if quota:
+                            raise IllustrationUnavailable(
+                                f"Free image quota did not refill within {waited:.0f}s"
+                            )
                         raise IllustrationUnavailable(
-                            f"Free image quota did not refill within "
-                            f"{settings.ILLUSTRATION_FREE_MAX_WAIT_SECONDS:.0f}s"
+                            f"Free image host kept answering HTTP "
+                            f"{response.status_code} after {waited:.0f}s"
                         )
                     await asyncio.sleep(float(settings.ILLUSTRATION_FREE_INTERVAL_SECONDS))
                     continue

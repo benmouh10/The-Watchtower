@@ -265,7 +265,11 @@ class Settings(BaseSettings):
     # Art direction is written by the configured LLM (Ollama by default, so this
     # stays free) and kept verbatim, because the prompt is what an editor needs to
     # see to judge the image.
-    ILLUSTRATION_PROMPT_MAX_CHARS: int = 400
+    # 400 was below the length of the descriptions the model was already writing:
+    # they were being cut mid-sentence, usually inside the colour palette, so the
+    # image was left without one. 700 holds a 70-word scene plus the clauses that
+    # are appended to it.
+    ILLUSTRATION_PROMPT_MAX_CHARS: int = 700
     ILLUSTRATION_ATTRIBUTION: str = "Generated image — not a photograph"
     # Same reasoning as LLM_ENRICH_LOCK_TTL_SECONDS: the worker runs one
     # process per core, so an unguarded backfill runs every batch in parallel and

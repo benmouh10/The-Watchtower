@@ -112,9 +112,11 @@ class _FakeLLM:
         self._text = text
         self._error = error
         self.prompts = []
+        self.systems = []
 
     async def generate_text(self, system, prompt, max_tokens=200, temperature=0.7):
         self.prompts.append(prompt)
+        self.systems.append(system)
         if self._error is not None:
             return None
         return self._text
@@ -677,12 +679,13 @@ class TestPollinationsFreeProvider:
 
     @pytest.mark.asyncio
     async def test_other_status_codes_fail_immediately(self, monkeypatch):
+        """A 4xx that is not the quota is a bad request, not a bad moment."""
         monkeypatch.setattr(settings, "ILLUSTRATION_FREE_INTERVAL_SECONDS", 0.0)
         attempts = {"n": 0}
 
         class _Resp:
-            status_code = 500
-            content = b"boom"
+            status_code = 414
+            content = b"prompt too long"
 
         class _Client:
             def __init__(self, **kwargs):
@@ -699,11 +702,47 @@ class TestPollinationsFreeProvider:
                 return _Resp()
 
         monkeypatch.setattr("httpx.AsyncClient", _Client)
-        with pytest.raises(IllustrationUnavailable, match="HTTP 500"):
+        with pytest.raises(IllustrationUnavailable, match="HTTP 414"):
             await IllustrationService(provider="pollinations-free").request_image("x")
 
-        # A 500 is not the quota; retrying it would just hammer the endpoint.
+        # Retrying a rejected prompt would return the same answer forever.
         assert attempts["n"] == 1
+
+    @pytest.mark.asyncio
+    async def test_waits_out_a_5xx_instead_of_failing_the_event(self, monkeypatch):
+        """5xx from this host was observed only when two clients hit it at once,
+        and passed when reissued on its own. It is waited out at the refill
+        interval — which is a minute — so a dead endpoint is not hammered, but a
+        bad moment no longer costs the event a FAILED row and a 15-minute wait."""
+        monkeypatch.setattr(settings, "ILLUSTRATION_FREE_INTERVAL_SECONDS", 0.0)
+        attempts = {"n": 0}
+
+        class _Resp:
+            def __init__(self, status_code, content):
+                self.status_code = status_code
+                self.content = content
+
+        class _Client:
+            def __init__(self, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def get(self, url):
+                attempts["n"] += 1
+                if attempts["n"] < 3:
+                    return _Resp(500, b"")
+                return _Resp(200, JPEG_1x1)
+
+        monkeypatch.setattr("httpx.AsyncClient", _Client)
+        data, _ = await IllustrationService(provider="pollinations-free").request_image("x")
+
+        assert data == JPEG_1x1
+        assert attempts["n"] == 3
 
     def test_requests_the_capped_edge(self, monkeypatch):
         from app.services.illustration_service import _FREE_MAX_EDGE
@@ -837,6 +876,37 @@ class TestComposePrompt:
     async def test_prompt_is_bounded_by_the_configured_maximum(self, enabled):
         service = _service(_FakeClient(_FakeImages([])), llm=_FakeLLM(text="word " * 4000))
         prompt = await service.compose_prompt("Title", "Summary", "CLIMATE", "Spain")
+        assert len(prompt) <= settings.ILLUSTRATION_PROMPT_MAX_CHARS
+
+    @pytest.mark.asyncio
+    async def test_briefs_the_model_to_work_from_the_analysis(self, enabled):
+        """The brief used to ask for "one short line" about the headline and
+        never mention the summary, which is the part that says what actually
+        happened. Images came back as topic wallpaper."""
+        llm = _FakeLLM(text="a flooded street with overturned market stalls")
+        service = _service(_FakeClient(_FakeImages([])), llm=llm)
+
+        await service.compose_prompt("Title", "The analysis of the event", "CLIMATE", "Spain")
+
+        brief = llm.systems[0].lower()
+        assert "analysis" in brief
+        assert "45 to 70 words" in brief
+        assert "The analysis of the event" in llm.prompts[0]
+
+    @pytest.mark.asyncio
+    async def test_negatives_survive_a_verbose_model(self, enabled):
+        """The description used to be clipped as one string with the clauses
+        appended to it, so the no-text and no-people refusals fell off the end
+        exactly when the model wrote at length — and it is verbose models that
+        invent lettering."""
+        from app.services.illustration_service import _ASPECT_BY_SHAPE, _STYLE_SUFFIX
+
+        service = _service(_FakeClient(_FakeImages([])), llm=_FakeLLM(text="word " * 4000))
+
+        prompt = await service.compose_prompt("Title", "Summary", "CLIMATE", "Spain")
+
+        assert _STYLE_SUFFIX in prompt
+        assert _ASPECT_BY_SHAPE["wide"] in prompt
         assert len(prompt) <= settings.ILLUSTRATION_PROMPT_MAX_CHARS
 
 
