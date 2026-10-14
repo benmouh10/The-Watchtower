@@ -964,15 +964,38 @@ export default function EventDetailPage() {
               Detailed analytical synthesis tag-linked to {event.country || "Global Region"} operational updates.
             </p>
 
-            {/* Hero Image */}
+            {/* Hero Image. The generated artwork takes this slot when one
+                exists, so the stock placeholder never sits above a real
+                illustration — two pictures at the top of the same report read
+                as a bug, and the placeholder is the one shared by every event. */}
             <div className="w-full h-[250px] md:h-[380px] rounded border border-outline-variant bg-surface-container overflow-hidden mt-2 relative">
-              <img 
-                alt="Analytical map or visualization" 
-                className="w-full h-full object-cover opacity-80 mix-blend-luminosity hover:mix-blend-normal transition-all duration-500"
-                src="https://lh3.googleusercontent.com/aida-public/AB6AXuDSP9yo5kG__HrAfn-e8URLtZr9SXssOai6gtJj8UcPd6bcFLngSfhOehWcUFJsd562571h35zQDEGg9iBrz_Os1umIt4AtXTKmCceDgigeBNEb_qxdnSqiTbIbaC38gsHa7aBnqFrHUvif3x2swtmTok1k2gUhlBSh_ZiejcOANdOmaDw2DP8Yxslct6LhTJgAGXrUfqgqEEL3Vze0sHsK2lQTsp_OVa8flFH6e1e9K05HwOHhHse3z1ZPqm2qDhmXSOOWx9hworKq"
-              />
+              {event.illustration?.url ? (
+                <EventIllustrationImage
+                  illustration={event.illustration}
+                  variant="fill"
+                  alt=""
+                />
+              ) : (
+                <img
+                  alt="Analytical map or visualization"
+                  className="w-full h-full object-cover opacity-80 mix-blend-luminosity hover:mix-blend-normal transition-all duration-500"
+                  src="https://lh3.googleusercontent.com/aida-public/AB6AXuDSP9yo5kG__HrAfn-e8URLtZr9SXssOai6gtJj8UcPd6bcFLngSfhOehWcUFJsd562571h35zQDEGg9iBrz_Os1umIt4AtXTKmCceDgigeBNEb_qxdnSqiTbIbaC38gsHa7aBnqFrHUvif3x2swtmTok1k2gUhlBSh_ZiejcOANdOmaDw2DP8Yxslct6LhTJgAGXrUfqgqEEL3Vze0sHsK2lQTsp_OVa8flFH6e1e9K05HwOHhHse3z1ZPqm2qDhmXSOOWx9hworKq"
+                />
+              )}
               <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-background to-transparent h-24 pointer-events-none"></div>
             </div>
+
+            {/* The caption lives below the frame because the frame clips: a
+                <figure> inside an overflow-hidden box would hide it, and the
+                label is the point — it says the image is generated. */}
+            {event.illustration?.attribution ? (
+              <p
+                id="illustration-attribution"
+                className="font-mono-data text-[10px] text-on-surface-variant mt-2"
+              >
+                {event.illustration.attribution}
+              </p>
+            ) : null}
           </article>
 
           {/* Bias Detection & AI Confidence Panel */}
@@ -1014,19 +1037,6 @@ export default function EventDetailPage() {
               </div>
             </div>
           </section>
-
-          {/* Event artwork. Placed under the metadata header so the attribution
-              caption reads as a credit rather than as part of the report body. */}
-          {event.illustration ? (
-            <div className="border-b border-outline-variant/40 pb-6">
-              <EventIllustrationImage
-                illustration={event.illustration}
-                variant="hero"
-                alt=""
-                className="max-h-[420px]"
-              />
-            </div>
-          ) : null}
 
           {/* Synthesized Body */}
           <div className="border-b border-outline-variant/40 pb-6">

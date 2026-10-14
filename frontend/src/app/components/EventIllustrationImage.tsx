@@ -25,7 +25,7 @@ interface IllustrationProps {
   className?: string;
   alt?: string;
   /** Rendered small and cropped for a card; larger and full-width on detail. */
-  variant?: "card" | "hero";
+  variant?: "card" | "hero" | "fill";
 }
 
 export default function EventIllustrationImage({
@@ -36,7 +36,29 @@ export default function EventIllustrationImage({
 }: IllustrationProps) {
   if (!illustration?.url) return null;
 
-  const describedBy = illustration.attribution ? "illustration-attribution" : undefined;
+  // Only the variants that actually render the caption can point at it; on a
+  // card the caption is omitted, so an aria-describedby there would dangle.
+  const describedBy =
+    illustration.attribution && variant !== "card"
+      ? "illustration-attribution"
+      : undefined;
+
+  // "fill" hands the whole <img> over to a caller that owns the frame and the
+  // caption: the hero box on a detail page has its own fixed height and
+  // overflow-hidden, so a <figure> inside it would clip the attribution. The
+  // caller renders that below the frame instead.
+  if (variant === "fill") {
+    return (
+      <img
+        src={illustration.url}
+        alt={alt ?? ""}
+        aria-describedby={describedBy}
+        width={illustration.width || undefined}
+        height={illustration.height || undefined}
+        className={`w-full h-full object-cover ${className}`}
+      />
+    );
+  }
 
   return (
     <figure className="m-0">
