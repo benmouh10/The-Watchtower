@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Mail, Key, ArrowRight, Shield, Globe, Send, ArrowLeft } from "lucide-react";
-import GlobelensLogo from "../components/GlobelensLogo";
+import WatchtowerLogo from "../components/WatchtowerLogo";
 
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -134,9 +134,9 @@ export default function LoginPage() {
 
         {/* Top Branding */}
         <div className="relative z-10 flex items-center gap-3 text-white">
-          <GlobelensLogo size="36px" hideWordmark={true} />
+          <WatchtowerLogo size="36px" hideWordmark={true} />
           <span className="font-headline-lg text-headline-lg font-extrabold tracking-tight bg-gradient-to-r from-cyber-cyan via-indigo-200 to-cyber-indigo bg-clip-text text-transparent drop-shadow-[0_0_10px_rgba(6,182,212,0.15)]">
-            GlobeLens AI
+            The Watchtower
           </span>
         </div>
 
@@ -159,9 +159,9 @@ export default function LoginPage() {
 
         {/* Mobile Logo */}
         <div className="absolute top-8 left-8 flex lg:hidden items-center gap-2 text-white">
-          <GlobelensLogo size="28px" hideWordmark={true} />
+          <WatchtowerLogo size="28px" hideWordmark={true} />
           <span className="font-extrabold tracking-tight bg-gradient-to-r from-cyber-cyan to-cyber-indigo bg-clip-text text-transparent">
-            GlobeLens
+            The Watchtower
           </span>
         </div>
 

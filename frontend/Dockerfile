@@ -1,5 +1,5 @@
 # =============================================================================
-# GlobeLens AI — Next.js Frontend Dockerfile
+# The Watchtower — Next.js Frontend Dockerfile
 # Multi-stage build: base → development → production
 # =============================================================================
 
@@ -8,8 +8,8 @@
 # ─────────────────────────────────────────────────────────────────────────────
 FROM node:20-alpine AS base
 
-LABEL maintainer="GlobeLens AI Team"
-LABEL description="GlobeLens AI Next.js Frontend"
+LABEL maintainer="The Watchtower Team"
+LABEL description="The Watchtower Next.js Frontend"
 
 # Install libc compatibility for Alpine (required by some native modules)
 RUN apk add --no-cache libc6-compat curl

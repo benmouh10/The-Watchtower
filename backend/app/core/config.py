@@ -47,6 +47,40 @@ class Settings(BaseSettings):
     RATE_LIMIT_GUEST: str = "30/minute"
     RATE_LIMIT_TRUST_FORWARDED: bool = False
 
+    # ── Threat Lens (S5 innovation — anomaly-based abuse defence) ──────────────
+    # Catches traffic that a rate limiter cannot: credential stuffing that stays
+    # under the counter, oversized bodies, spoofed X-Forwarded-For, traversal
+    # paths. A middleware enqueues per-request telemetry onto the dedicated Celery
+    # "threat" queue; the threat worker scores it with the shared_core model and
+    # blocks an identity that logs several anomalies within a short window.
+    #
+    # Everything in this layer is fail-open and OFF by default: a fresh checkout
+    # behaves exactly as before, and a Redis or worker outage never takes the API
+    # down — the worst case is that abuse protection goes quiet.
+    THREAT_LENS_ENABLED: bool = False
+    THREAT_LENS_QUEUE: str = "threat"
+    THREAT_LENS_TASK: str = "app.worker.threat_tasks.analyze_telemetry_task"
+    THREAT_LENS_MODEL_PATH: str = "/app/models/threat_lens.joblib"
+    # Redis: a per-identity block marker and a "block feed" list that admin or
+    # monitoring can tail to see recent decisions.
+    THREAT_LENS_BLOCKLIST_KEY_PREFIX: str = "threat:blocked"
+    THREAT_LENS_BLOCKS_FEED_KEY: str = "threat:blocks"
+    THREAT_LENS_BLOCK_TTL_SECONDS: int = 3600
+    # A request whose anomaly risk (0..1, the percentile of the normal fit) lands
+    # at or above this counts toward a blocking window. 0.90 is the synthetic
+    # calibration tail; a genuine user's traffic sits far below it.
+    THREAT_LENS_RISK_THRESHOLD: float = 0.90
+    # An identity must trip the risk threshold this many times within
+    # THREAT_LENS_WINDOW_SIZE telemetry events before being blocked, so a single
+    # noisy request can never lock a real user out.
+    THREAT_LENS_WINDOW_MIN_ANOMALIES: int = 2
+    THREAT_LENS_WINDOW_SIZE: int = 5
+    THREAT_LENS_RATE_WINDOW_SECONDS: int = 60
+    # Loopback/private-range identities (Docker bridge, localhost) are scored
+    # and recorded on the block feed but NEVER get a 403 marker — the operator
+    # can't lock themselves out of their own stack while trialling the feature.
+    THREAT_LENS_SKIP_PRIVATE_PEERS: bool = True
+
     # ── Security response headers (see app/middleware/security_headers.py) ────
     # HSTS is emitted automatically only when APP_ENV=production.
     SECURITY_HEADERS_ENABLED: bool = True

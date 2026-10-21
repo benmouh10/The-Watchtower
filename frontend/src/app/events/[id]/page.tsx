@@ -617,8 +617,8 @@ export default function EventDetailPage() {
     if (navigator.share) {
       try {
         await navigator.share({
-          title: event?.title || 'GlobeLens AI Dossier',
-          text: 'Read this intelligence dossier on GlobeLens AI',
+          title: event?.title || 'The Watchtower Dossier',
+          text: 'Read this intelligence dossier on The Watchtower',
           url: window.location.href,
         });
       } catch (err) {
@@ -740,7 +740,7 @@ export default function EventDetailPage() {
   // Admin console is only relevant to administrators
   const showAdmin = userRole === "ADMIN";
 
-  // Loading skeleton matching loading_feed_globelens_ai aesthetic
+  // Loading skeleton matching loading_feed_the_watchtower aesthetic
   if (loading) {
     return (
       <div className="bg-background text-on-background min-h-screen flex flex-col font-body-md">
@@ -764,7 +764,7 @@ export default function EventDetailPage() {
     );
   }
 
-  // Not Found / Error UI mapping 404_intelligence_gap_globelens_ai
+  // Not Found / Error UI mapping 404_intelligence_gap_the_watchtower
   if (error || !event) {
     return (
       <div className="bg-background text-on-background min-h-screen flex flex-col font-body-md relative overflow-hidden">
@@ -1522,8 +1522,8 @@ export default function EventDetailPage() {
       {/* Footer */}
       <footer className="bg-surface-container-low border-t border-outline-variant/50 w-full py-6 px-margin-desktop mt-auto flex flex-col md:flex-row justify-between items-center z-10 relative">
         <div className="mb-4 md:mb-0">
-          <span className="font-headline-lg text-headline-lg font-bold text-primary block mb-1">GlobeLens AI</span>
-          <p className="font-body-sm text-body-sm text-on-surface-variant">© 2026 GlobeLens AI. Authoritative Editorial Intelligence.</p>
+          <span className="font-headline-lg text-headline-lg font-bold text-primary block mb-1">The Watchtower</span>
+          <p className="font-body-sm text-body-sm text-on-surface-variant">© 2026 The Watchtower. Authoritative Editorial Intelligence.</p>
         </div>
         <nav className="flex flex-wrap gap-4 md:gap-6 items-center justify-center text-xs">
           <a className="text-on-surface-variant hover:text-primary transition-colors" href="#">Institutional Briefs</a>

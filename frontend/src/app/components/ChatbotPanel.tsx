@@ -140,7 +140,7 @@ export default function ChatbotPanel({ onClose }: ChatbotPanelProps) {
                 {msg.source === "database" ? (
                   <span className="flex items-center gap-1 text-cyber-cyan bg-cyber-cyan/10 px-1.5 py-0.5 rounded border border-cyber-cyan/20">
                     <Database className="w-2.5 h-2.5" />
-                    GlobeLens Database
+                    The Watchtower Database
                   </span>
                 ) : (
                   <span className="flex items-center gap-1 text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded border border-amber-400/20">

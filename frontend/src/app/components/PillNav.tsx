@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { gsap } from 'gsap';
 import './PillNav.css';
-import GlobelensLogo from './GlobelensLogo';
+import WatchtowerLogo from './WatchtowerLogo';
 
 
 interface NavItem {
@@ -265,7 +265,7 @@ const PillNav = ({
             }}
           >
             <div ref={logoImgRef} className="w-full h-full flex items-center justify-center">
-              <GlobelensLogo size="100%" hideWordmark />
+              <WatchtowerLogo size="100%" hideWordmark />
             </div>
           </Link>
         ) : (
@@ -279,7 +279,7 @@ const PillNav = ({
             }}
           >
             <div ref={logoImgRef} className="w-full h-full flex items-center justify-center">
-              <GlobelensLogo size="100%" hideWordmark />
+              <WatchtowerLogo size="100%" hideWordmark />
             </div>
           </a>
         )}

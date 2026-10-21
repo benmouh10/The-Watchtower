@@ -69,7 +69,7 @@ export default function PrimaryNav({
     <>
     <PillNav
       logo="/logo.svg"
-      logoAlt="GlobeLens AI Logo"
+      logoAlt="The Watchtower Logo"
       items={[
         { label: "Standard", href: "/?view=standard", onClick: handleStandard },
         { label: "Map", href: "/?view=map", onClick: handleMap },

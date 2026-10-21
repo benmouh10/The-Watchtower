@@ -1,8 +1,8 @@
 {
-  "name": "globelens-ai-frontend",
+  "name": "the-watchtower-frontend",
   "version": "0.1.0",
   "private": true,
-  "description": "GlobeLens AI — News Intelligence Platform Web Client",
+  "description": "The Watchtower — News Intelligence Platform Web Client",
   "scripts": {
     "dev": "next dev -p 3000",
     "build": "next build",

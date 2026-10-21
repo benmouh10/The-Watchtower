@@ -60,3 +60,7 @@ htmlcov/
 *.log
 logs/
 
+
+# Threat Lens model artifacts (live on the model_data volume, not in git)
+*.joblib
+

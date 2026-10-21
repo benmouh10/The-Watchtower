@@ -1,5 +1,5 @@
 /*
- * GlobeLens service worker.
+ * The Watchtower service worker.
  *
  * Two jobs:
  *   1. Static asset caching (production only).
@@ -67,14 +67,14 @@ self.addEventListener("activate", (event) => {
 
 const OFFLINE_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Offline — GlobeLens</title>
+<title>Offline — The Watchtower</title>
 <style>body{background:#030712;color:#e5e7eb;font-family:system-ui,sans-serif;
 display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:1.5rem}
 div{max-width:24rem;text-align:center}h1{font-size:1.25rem;margin:0 0 .75rem}
 p{font-size:.875rem;color:#9ca3af;line-height:1.6;margin:0 0 1rem}
 a{color:#60a5fa;font-size:.875rem}</style></head><body><div>
 <h1>You are offline</h1>
-<p>GlobeLens could not reach the network. Event intelligence is served live
+<p>The Watchtower could not reach the network. Event intelligence is served live
 and never cached, so nothing is shown here rather than risk presenting stale
 reporting as current.</p>
 <a href="/offline">Open your Offline Library</a> &nbsp;·&nbsp; <a href="/">Try again</a></div></body></html>`;
@@ -169,9 +169,9 @@ self.addEventListener("push", (event) => {
   try {
     payload = event.data ? event.data.json() : {};
   } catch (err) {
-    payload = { title: "GlobeLens AI", body: event.data ? event.data.text() : "" };
+    payload = { title: "The Watchtower", body: event.data ? event.data.text() : "" };
   }
-  const title = payload.title || "GlobeLens AI";
+  const title = payload.title || "The Watchtower";
   const options = {
     body: payload.body || "",
     icon: "/icon-dark-32x32.png",
@@ -185,7 +185,7 @@ self.addEventListener("push", (event) => {
   event.waitUntil(self.registration.showNotification(title, options));
 });
 
-// Focus an existing GlobeLens tab on the target URL, or open a new one.
+// Focus an existing The Watchtower tab on the target URL, or open a new one.
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const data = event.notification.data || {};

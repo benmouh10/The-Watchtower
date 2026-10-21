@@ -62,12 +62,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy and install Python dependencies in a dedicated layer for caching
-COPY requirements.txt .
+COPY backend/requirements.txt .
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt && \
     mkdir -p /ms-playwright && \
     playwright install chromium && \
     chmod -R 777 /ms-playwright
+
+# Threat Lens shared core (feature extraction + anomaly model). Baked at image
+# build so reproduction depends only on the git ref checked out, not on a
+# running container's site-packages. The trained artifact itself stays on the
+# model_data volume (see docker-compose.yml); only the code is baked here.
+COPY shared_core ./shared_core
+RUN pip install --no-cache-dir ./shared_core
 
 # Local (free, offline) text-to-speech. Split from the layer above so editing
 # ML dependencies does not invalidate the Playwright download, and so images
@@ -78,7 +85,7 @@ ARG KOKORO_VOICES_SHA256=bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c
 ENV TTS_LOCAL_MODEL_PATH=/app/models/tts/kokoro-v1.0.onnx \
     TTS_LOCAL_VOICES_PATH=/app/models/tts/voices-v1.0.bin
 
-COPY requirements-tts.txt .
+COPY backend/requirements-tts.txt .
 RUN pip install --no-cache-dir -r requirements-tts.txt
 
 # The model is fetched once at build time and verified, so a deployment never
@@ -93,8 +100,8 @@ RUN mkdir -p /app/models/tts && \
     echo "${KOKORO_VOICES_SHA256}  /app/models/tts/voices-v1.0.bin" | sha256sum -c -
 
 # Copy Alembic migration files
-COPY alembic.ini .
-COPY alembic ./alembic
+COPY backend/alembic.ini .
+COPY backend/alembic ./alembic
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Stage 2: development — hot-reload via uvicorn --reload
@@ -104,7 +111,7 @@ FROM base AS development
 ENV APP_ENV=development
 
 # Copy the full application source
-COPY ./app ./app
+COPY backend/app ./app
 
 # Expose FastAPI port
 EXPOSE 8000
@@ -132,7 +139,7 @@ ENV APP_ENV=production
 RUN addgroup --system globelens && \
     adduser --system --ingroup globelens --no-create-home globelens
 
-COPY --chown=globelens:globelens ./app ./app
+COPY --chown=globelens:globelens backend/app ./app
 
 # The media volume mounts here, and Docker seeds an empty named volume from the
 # image directory it covers — including its ownership. Without this the

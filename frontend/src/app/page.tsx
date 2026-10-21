@@ -449,7 +449,7 @@ export default function HomePage() {
         </main>
 
       ) : (
-        /* 2. STANDARD FEED VIEW (home_feed_globelens_ai port) */
+        /* 2. STANDARD FEED VIEW (home_feed_the_watchtower port) */
         <div className="flex-grow w-full overflow-y-auto no-scrollbar flex flex-col bg-surface-container-lowest">
           <div className="flex-grow flex w-full max-w-container-max-width mx-auto relative px-margin-mobile md:px-margin-desktop py-stack-lg">
             
@@ -686,8 +686,8 @@ export default function HomePage() {
           {/* Institutional Footer */}
           <footer className="bg-surface-container-low border-t border-outline-variant/50 w-full py-6 px-margin-desktop mt-auto flex flex-col md:flex-row justify-between items-center z-10 relative">
             <div className="mb-4 md:mb-0">
-              <span className="font-headline-lg text-headline-lg font-bold text-primary block mb-1">GlobeLens AI</span>
-              <p className="font-body-sm text-body-sm text-on-surface-variant">© 2026 GlobeLens AI. Authoritative Editorial Intelligence.</p>
+              <span className="font-headline-lg text-headline-lg font-bold text-primary block mb-1">The Watchtower</span>
+              <p className="font-body-sm text-body-sm text-on-surface-variant">© 2026 The Watchtower. Authoritative Editorial Intelligence.</p>
             </div>
             <nav className="flex flex-wrap gap-4 md:gap-6 items-center justify-center text-xs">
               <a className="text-on-surface-variant hover:text-primary transition-colors" href="#">Institutional Briefs</a>

@@ -3,16 +3,16 @@ import "./globals.css";
 import ServiceWorkerRegistration from "../components/ServiceWorkerRegistration";
 
 export const metadata: Metadata = {
-  title: "GlobeLens AI — News Intelligence Platform",
+  title: "The Watchtower — News Intelligence Platform",
   description:
     "Advanced AI-powered news intelligence platform. Multi-source synthesis, bias detection, geo-tagged events, and real-time fact-checking.",
   keywords: ["news", "AI", "intelligence", "bias detection", "fact-check"],
-  authors: [{ name: "GlobeLens AI Team" }],
+  authors: [{ name: "The Watchtower Team" }],
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "GlobeLens",
+    title: "The Watchtower",
   },
   icons: {
     icon: [

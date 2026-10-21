@@ -35,6 +35,14 @@ celery_app.conf.update(
     broker_connection_retry_on_startup=True,
 )
 
+# Threat Lens telemetry goes to its own queue so high-frequency request scoring
+# can never starve enrichment/newsletter work on the default "celery" queue —
+# and the main worker must not consume it, which the threat container's
+# `-Q threat` flag makes explicit on the other end.
+celery_app.conf.task_routes = {
+    settings.THREAT_LENS_TASK: {"queue": settings.THREAT_LENS_QUEUE},
+}
+
 celery_app.conf.beat_schedule = {
     "enrich-pending-events": {
         "task": "app.worker.tasks.enrich_pending_events_task",
@@ -68,5 +76,9 @@ celery_app.conf.beat_schedule = {
     },
 }
 
-# Ensures app.worker.tasks is imported when the worker starts.
+# Ensures app.worker.tasks + app.worker.threat_tasks are imported when the
+# worker starts. autodiscover's default related_name is "tasks", so the Threat
+# Lens module must be imported explicitly or its task never registers and every
+# telemetry message dies with a KeyError at the consumer.
 celery_app.autodiscover_tasks(["app.worker"])
+import app.worker.threat_tasks  # noqa: E402  (registers analyze_telemetry_task)

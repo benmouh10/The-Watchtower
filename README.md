@@ -113,7 +113,7 @@ All routes are under `/api/v1`. Implemented endpoints:
 | Fact-check | `POST /fact-check` · `GET /fact-check/{id}` · `GET /fact-check/users/{id}` |
 | Chatbot | `POST /chatbot` |
 | Pipeline | `POST /articles/sync` · `POST /admin/{embed,cluster,llm}/process` |
-| Admin | `GET /admin/stats` · `POST /admin/search/sync` |
+| Admin | `GET /admin/stats` · `POST /admin/search/sync` · `GET/POST /admin/threat/blocks` · `POST /admin/threat/blocks/{ip}/unblock` |
 
 Auth is a JWT (HS256, 30 min) with four roles: `GUEST` → `AUTH_USER` → `JOURNALIST` → `ADMIN`.
 
@@ -127,8 +127,8 @@ Read this before exposing the stack beyond localhost:
 
 - **Incomplete authorization.** Most `/api/v1/admin/*` routes are stubs that do **not** check
   the `ADMIN` role. `DELETE /admin/users/{id}` and `PUT /admin/users/{id}/role` are live paths
-  with no guard. Only `/admin/stats`, `/admin/{embed,cluster,llm}/process`, and
-  `/admin/search/sync` are actually protected.
+  with no guard. Only `/admin/stats`, `/admin/{embed,cluster,llm}/process`,
+  `/admin/search/sync`, and the `/admin/threat/*` routes are actually protected.
 - **Placeholder token.** `POST /auth/refresh` returns the literal string
   `new_placeholder_jwt_token` and requires no authentication.
 - **Weak committed defaults.** `SECRET_KEY`, `POSTGRES_PASSWORD`, and `REDIS_PASSWORD` fall
@@ -142,6 +142,86 @@ Read this before exposing the stack beyond localhost:
   historical matches that are indistinguishable from real output to API consumers.
 - **Token storage.** The frontend keeps the JWT in `localStorage` and a JS-writable cookie
   (no `HttpOnly`), and `middleware.ts` gates `/admin/*` on cookie *presence* only.
+
+## Threat Lens (innovation S5)
+
+Threat Lens scores live request telemetry for anomalous patterns (missing user
+agent, oversized bodies, repeated auth failures, …) and, when a client trips the
+risk threshold enough times inside a short window, blocks it at the edge: every
+subsequent request from that identity answers `403` with a friendly body until the
+block expires. It is built around a synthetic forest trained to model *normal* traffic
+only — risk is the percentile a request's feature vector earns against those normal
+scores, so the model never needs real abuse samples.
+
+### Architecture
+
+| Piece | Where |
+|---|---|
+| Block enforcement + telemetry | `backend/app/middleware/threat_lens.py` — checks the Redis marker, then fires one scored event onto the `threat` queue (off the request path, fail-open) |
+| Scoring | Celery task `app.worker.threat_tasks.analyze_telemetry_task`, consumed by the dedicated autoscaling `threat` compose service (main worker stays on the default queue) |
+| Features + model | `backend/shared_core` (`features.py`, `threat_model.py`, `AnomalyDetector`) |
+| Block state | Redis markers `threat:blocked:{ip}` (403 enforcement, TTL), `threat:window:{ip}` (anomaly window), `threat:blocks` feed; durable audit row in `blocked_ips` |
+| Scoring sidecar | `threat` service exposes `GET :9000/health` and `POST :9000/score` with body `{"telemetry": {<TelemetryEvent fields>}}` (`method`, `path`, `header_count`, `header_entropy`, `user_agent_present`, `user_agent_length`, `payload_bytes`, `content_type_is_json`, `has_authorization`, `has_forwarded`, `path_depth`, `is_api_path`, `time_of_day`, `endpoint_sensitivity`, `status` — the rest default) for live model verification |
+
+### Behavior
+
+- **Fail-open everywhere.** Any Redis/scoring/model glitch logs and lets the request
+  through. A fresh checkout (`THREAT_LENS_ENABLED=false`) is completely inert.
+- **No single-request lock-outs.** An identity needs `THREAT_LENS_WINDOW_MIN_ANOMALIES`
+  anomalies within `THREAT_LENS_WINDOW_SIZE` events before the marker is written; a
+  noisy legit request can never ban a real user.
+- **Private/dev peers are watched, never locked out.** Loopback and RFC 1918 identities
+  (localhost, the Docker bridge — i.e. the operator's own traffic) are scored and
+  recorded on the block feed but never get a 403 marker (`THREAT_LENS_SKIP_PRIVATE_PEERS`,
+  on by default). TEST-NET documentation ranges stay blockable so demos work.
+- **Block lifecycle.** The worker writes marker + feed entry + `blocked_ips` row
+  (reason `anomalous_x{count}_risk_{r}`). Unblocking clears all of it; the feed entry
+  survives as history.
+- **Identity pinning.** Under a reverse proxy the client is identified via
+  `X-Forwarded-For` when `RATE_LIMIT_TRUST_FORWARDED=true`, otherwise by socket peer.
+
+### Admin self-serve
+
+| Route | What it does |
+|---|---|
+| `GET /api/v1/admin/threat/blocks` | `blocked_ips` rows (newest first, `limit`/`offset`) + live `active` flag per identity (Redis marker present?) + recent feed entries |
+| `POST /api/v1/admin/threat/blocks` | operator block `{"ip": ..., "reason": ...}` → marker + feed + `blocked_ips` row with `source=MANUAL` |
+| `POST /api/v1/admin/threat/blocks/{ip}/unblock` | revoke — clears marker, anomaly window, and row; `404` when nothing exists for the identity |
+
+The whole admin router (including these routes) is gated by the `require_admin`
+router dependency, so they inherit the `ADMIN`-only policy the policy test enforces.
+
+### Training & provisioning
+
+```bash
+# Retrain the forest against committed code (synthetic normal-only + evaluation)
+docker compose exec -T backend python -m app.threat_lens_train \
+  --out /app/models/threat_lens.joblib
+```
+
+The artifact lives on the shared `model_data` volume that both the backend and the
+`threat` container mount at `/app/models` (same image, same artifacts). Drop the file
+there and the sidecar loads it self-healingly — the detector re-checks on demand if a
+container boots before the artifact lands (`model_loaded` flips from `false` to `true`
+on `:9000/health` without a restart).
+
+### Operator knobs (`.env`)
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `THREAT_LENS_ENABLED` | `false` | master switch for telemetry sampling + enforcement |
+| `THREAT_LENS_RISK_THRESHOLD` | `0.90` | risk percentile that counts as an anomaly |
+| `THREAT_LENS_WINDOW_MIN_ANOMALIES` | `2` | anomalies required inside the window to block |
+| `THREAT_LENS_WINDOW_SIZE` | `5` | rolling window of scored events per identity |
+| `THREAT_LENS_BLOCK_TTL_SECONDS` | `3600` | block marker / audit expiry |
+| `THREAT_LENS_RATE_WINDOW_SECONDS` | `60` | window over which `request_rate` is measured |
+| `THREAT_LENS_SKIP_PRIVATE_PEERS` | `true` | never 403 loopback/private-range identities (dev safety) |
+| `THREAT_SCORE_PORT` | `9000` | sidecar port (compose) |
+
+> **Worker registration caveat.** `app/worker/celery_app.py` imports
+> `app.worker.threat_tasks` explicitly after `autodiscover_tasks(["app.worker"])` —
+> Celery only auto-imports modules literally named `tasks`. Without that import every
+> telemetry message dies at the consumer with `KeyError` and requeues forever.
 
 ## Repository layout
 
