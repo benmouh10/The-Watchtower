@@ -7,7 +7,7 @@ import hashlib
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -72,10 +72,44 @@ async def resolve_listener(
     return await get_current_user(credentials, db)
 
 
+# ── Threat Lens enforcement on the auth path ──────────────────────────────────
+async def reject_blocked_identity(request: Request) -> None:
+    """Refuse an identity that Threat Lens has blocked, inside the auth path.
+
+    The edge middleware already drops blocked peers before the request is
+    handled; this second check keeps the guarantee for any mount that bypasses
+    that middleware (a test client, an ASGI sub-mount, or a future split of the
+    gateway) and satisfies the Sprint 1 requirement that enforcement live in the
+    auth path as well. Inert while THREAT_LENS_ENABLED is false and fail-open on
+    a cache error, exactly like the middleware: a Redis blip must never lock a
+    legitimate user out.
+    """
+    if not settings.THREAT_LENS_ENABLED:
+        return
+
+    # Imported lazily to keep auth_controller free of a module-level dependency
+    # on the Threat Lens service (it already pulls in config + cache + models).
+    from app.services import threat_lens as tl
+
+    identity = tl.client_identity(request)
+    if settings.THREAT_LENS_SKIP_PRIVATE_PEERS and tl.is_private_identity(identity):
+        return
+    try:
+        blocked = await tl.is_identity_blocked(identity)
+    except Exception:
+        blocked = False
+    if blocked:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=tl.BLOCKED_DETAIL,
+        )
+
+
 # ── Dependency for fetching current authenticated user ─────────────────────────
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _threat_check: None = Depends(reject_blocked_identity),
 ) -> User:
     """
     Dependency to validate access token and return current active user.
@@ -140,6 +174,7 @@ async def get_current_user(
 async def get_current_user_optional(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: AsyncSession = Depends(get_db),
+    _threat_check: None = Depends(reject_blocked_identity),
 ) -> Optional[User]:
     """Return the caller when a valid token is present, otherwise None.
 

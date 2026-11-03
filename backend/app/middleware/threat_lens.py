@@ -49,12 +49,7 @@ class ThreatLensMiddleware(BaseHTTPMiddleware):
             # leftover block can never hold the operator's own host hostage.
             return JSONResponse(
                 status_code=403,
-                content={
-                    "detail": (
-                        "This client is temporarily blocked because it was "
-                        "flagged as abusive traffic. Try again later."
-                    )
-                },
+                content={"detail": tl.BLOCKED_DETAIL},
             )
 
         response = await call_next(request)

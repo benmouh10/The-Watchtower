@@ -48,6 +48,14 @@ _SENSITIVE_ENDPOINTS = {
 # and static media. Mirror of the rate limiter's _EXEMPT_PATHS plus media.
 THREAT_EXEMPT_PATHS = {"/", "/health", "/docs", "/redoc", "/openapi.json", "/favicon.ico"}
 
+# One message for every 403 the block marker can produce, whether the request is
+# refused at the edge or by the auth-path re-check, so a client sees the same
+# explanation either way.
+BLOCKED_DETAIL = (
+    "This client is temporarily blocked because it was flagged as abusive "
+    "traffic. Try again later."
+)
+
 
 def _header_blob(headers) -> str:
     """Flatten a Starlette Headers object into one string for entropy math."""
