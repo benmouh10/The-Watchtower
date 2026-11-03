@@ -41,6 +41,8 @@ celery_app.conf.update(
 # `-Q threat` flag makes explicit on the other end.
 celery_app.conf.task_routes = {
     settings.THREAT_LENS_TASK: {"queue": settings.THREAT_LENS_QUEUE},
+    "threat.analyze": {"queue": settings.THREAT_LENS_QUEUE},
+    "app.tasks.threat.analyze": {"queue": settings.THREAT_LENS_QUEUE},
 }
 
 celery_app.conf.beat_schedule = {
@@ -81,4 +83,4 @@ celery_app.conf.beat_schedule = {
 # Lens module must be imported explicitly or its task never registers and every
 # telemetry message dies with a KeyError at the consumer.
 celery_app.autodiscover_tasks(["app.worker"])
-import app.worker.threat_tasks  # noqa: E402  (registers analyze_telemetry_task)
+import app.worker.threat_tasks  # noqa: E402  (registers analyze_telemetry_task and threat.analyze)

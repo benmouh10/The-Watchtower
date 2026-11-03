@@ -126,6 +126,40 @@ class BlockedIp(Base):
     blocked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
+    def __init__(self, **kwargs):
+        if "risk" in kwargs and "risk_score" not in kwargs:
+            kwargs["risk_score"] = kwargs.pop("risk")
+        if "created_at" in kwargs and "blocked_at" not in kwargs:
+            kwargs["blocked_at"] = kwargs.pop("created_at")
+        if "blocked_by" in kwargs and "source" not in kwargs:
+            b_by = kwargs.pop("blocked_by")
+            kwargs["source"] = BlockSource.THREAT_LENS.value if b_by == "auto" else BlockSource.MANUAL.value
+        super().__init__(**kwargs)
+
+    @property
+    def risk(self) -> Optional[float]:
+        return self.risk_score
+
+    @risk.setter
+    def risk(self, value: Optional[float]) -> None:
+        self.risk_score = value
+
+    @property
+    def blocked_by(self) -> str:
+        return "auto" if self.source == BlockSource.THREAT_LENS.value else "admin"
+
+    @blocked_by.setter
+    def blocked_by(self, value: str) -> None:
+        self.source = BlockSource.THREAT_LENS.value if value == "auto" else BlockSource.MANUAL.value
+
+    @property
+    def created_at(self) -> datetime:
+        return self.blocked_at
+
+    @created_at.setter
+    def created_at(self, value: datetime) -> None:
+        self.blocked_at = value
+
 
 # ── Source ────────────────────────────────────────────────────────────────────
 class Source(Base):

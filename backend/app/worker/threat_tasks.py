@@ -44,6 +44,17 @@ _PROCESS_LOOP: asyncio.AbstractEventLoop | None = None
 
 def _run_in_process_loop(coroutine) -> object:
     global _PROCESS_LOOP
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop is not None and loop.is_running():
+        import concurrent.futures
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            return executor.submit(asyncio.run, coroutine).result()
+
     if _PROCESS_LOOP is None or _PROCESS_LOOP.is_closed():
         _PROCESS_LOOP = asyncio.new_event_loop()
     asyncio.set_event_loop(_PROCESS_LOOP)
@@ -149,3 +160,9 @@ def analyze_telemetry_task(payload: dict) -> dict:
         "blocked": True,
         "reason": reason,
     }
+
+
+@celery_app.task(name="threat.analyze")
+def analyze_task(payload: dict) -> dict:
+    """Task alias registered under 'threat.analyze'."""
+    return analyze_telemetry_task(payload)
