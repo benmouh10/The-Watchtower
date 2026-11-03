@@ -159,7 +159,7 @@ scores, so the model never needs real abuse samples.
 |---|---|
 | Block enforcement + telemetry | `backend/app/middleware/threat_lens.py` — checks the Redis marker, then fires one scored event onto the `threat` queue (off the request path, fail-open) |
 | Scoring | Celery task `app.worker.threat_tasks.analyze_telemetry_task`, consumed by the dedicated autoscaling `threat` compose service (main worker stays on the default queue) |
-| Features + model | `backend/shared_core` (`features.py`, `threat_model.py`, `AnomalyDetector`) |
+| Features + model | `shared_core/` (`features.py`, `model.py`, `AnomalyDetector`) — installed into the backend/worker images |
 | Block state | Redis markers `threat:blocked:{ip}` (403 enforcement, TTL), `threat:window:{ip}` (anomaly window), `threat:blocks` feed; durable audit row in `blocked_ips` |
 | Scoring sidecar | `threat` service exposes `GET :9000/health` and `POST :9000/score` with body `{"telemetry": {<TelemetryEvent fields>}}` (`method`, `path`, `header_count`, `header_entropy`, `user_agent_present`, `user_agent_length`, `payload_bytes`, `content_type_is_json`, `has_authorization`, `has_forwarded`, `path_depth`, `is_api_path`, `time_of_day`, `endpoint_sensitivity`, `status` — the rest default) for live model verification |
 
@@ -195,15 +195,31 @@ router dependency, so they inherit the `ADMIN`-only policy the policy test enfor
 
 ```bash
 # Retrain the forest against committed code (synthetic normal-only + evaluation)
-docker compose exec -T backend python -m app.threat_lens_train \
+docker compose exec -T backend threat-lens-train \
   --out /app/models/threat_lens.joblib
+
+# Equivalent if the console script is missing from a stripped image:
+# docker compose exec -T backend python -m shared_core.training \
+#   --out /app/models/threat_lens.joblib
 ```
 
 The artifact lives on the shared `model_data` volume that both the backend and the
 `threat` container mount at `/app/models` (same image, same artifacts). Drop the file
 there and the sidecar loads it self-healingly — the detector re-checks on demand if a
 container boots before the artifact lands (`model_loaded` flips from `false` to `true`
-on `:9000/health` without a restart).
+without a restart).
+
+Verify the deployed model with either:
+
+```bash
+docker compose exec -T threat curl -s localhost:9000/health
+# {"status":"ok","model_loaded":true,"model_path":"/app/models/threat_lens.joblib"}
+
+docker compose exec -T threat curl -s localhost:9000/score   # GET, sample defaults
+```
+
+If `model_loaded` is `false`, scoring is skipped and nothing is blocked until the
+artifact appears on the volume (the system fails open by design).
 
 ### Operator knobs (`.env`)
 
