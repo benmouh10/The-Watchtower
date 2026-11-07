@@ -1,0 +1,30 @@
+{
+  "Layered backend restructure (`src/{api,services,core,data}`)": {
+    "number": 3,
+    "url": "https://github.com/benmouh10/The-Watchtower/issues/3"
+  },
+  "Enforce thin API routes (no business logic in controllers)": {
+    "number": 4,
+    "url": "https://github.com/benmouh10/The-Watchtower/issues/4"
+  },
+  "Remove ad-hoc/training scripts from the production package": {
+    "number": 5,
+    "url": "https://github.com/benmouh10/The-Watchtower/issues/5"
+  },
+  "Add `models/` artifacts loaded once at startup": {
+    "number": 6,
+    "url": "https://github.com/benmouh10/The-Watchtower/issues/6"
+  },
+  "Deployable, pinned service": {
+    "number": 7,
+    "url": "https://github.com/benmouh10/The-Watchtower/issues/7"
+  },
+  "Automated test coverage for layer boundaries": {
+    "number": 8,
+    "url": "https://github.com/benmouh10/The-Watchtower/issues/8"
+  },
+  "Kanban governance: granular issues + linked commits": {
+    "number": 9,
+    "url": "https://github.com/benmouh10/The-Watchtower/issues/9"
+  }
+}
