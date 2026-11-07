@@ -5,8 +5,8 @@ export function middleware(request: NextRequest) {
   const token = request.cookies.get("admin_token")?.value;
   const { pathname } = request.nextUrl;
 
-  // Guard all administrative dashboards
-  if (pathname.startsWith("/admin")) {
+  // Guard administrative and enterprise dashboards
+  if (pathname.startsWith("/admin") || pathname.startsWith("/org")) {
     if (!token) {
       // Redirect unauthorized users back to corporate login portal
       const loginUrl = new URL("/login", request.url);
@@ -17,7 +17,7 @@ export function middleware(request: NextRequest) {
   return NextResponse.next();
 }
 
-// Intercept administrative routes
+// Intercept administrative and enterprise routes
 export const config = {
-  matcher: ["/admin/:path*"],
+  matcher: ["/admin/:path*", "/org/:path*"],
 };

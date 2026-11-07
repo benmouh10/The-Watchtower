@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { 
   Globe, 
@@ -26,6 +26,7 @@ import SearchBar from "./components/SearchBar";
 import PillNav from "./components/PillNav";
 import MapFilterPanel from "./components/MapFilterPanel";
 import ChatbotPanel from "./components/ChatbotPanel";
+import ContradictionBadge from "./components/ContradictionBadge";
 
 
 // Dynamically import the Map component to prevent window undefined SSR issues
@@ -44,11 +45,20 @@ interface EventItem {
   importance_score: number;
   source_count: number;
   bias_lean?: string;
+  // Cross-source conflict signal derived from stored contradiction rows. level
+  // reflects the strongest scored pair (see _contradiction_signal) and is
+  // absent for events fetched before the field shipped.
+  contradiction_count?: number;
+  contradiction_max_confidence?: number | null;
+  contradiction_level?: string;
   created_at?: string;
 }
 
 export default function HomePage() {
   const [events, setEvents] = useState<EventItem[]>([]);
+  // Real most-recent ingest, from GET /events/latest. Used by the sidebar that
+  // used to render hard-coded fake wire items.
+  const [latestEvents, setLatestEvents] = useState<EventItem[]>([]);
   const [selectedEvent, setSelectedEvent] = useState<EventItem | null>(null);
   const [searchActive, setSearchActive] = useState(false);
   const [searchEmpty, setSearchEmpty] = useState(false);
@@ -84,7 +94,7 @@ export default function HomePage() {
   }, []);
 
   // Fetch events based on viewMode and pagination
-  const fetchEvents = async (page = 1) => {
+  const fetchEvents = useCallback(async (page = 1) => {
     setLoading(true);
     try {
       if (viewMode === "standard") {
@@ -110,11 +120,156 @@ export default function HomePage() {
     } finally {
       setLoading(false);
     }
+  }, [viewMode]);
+
+  const fetchLatest = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/events/latest?limit=6`);
+      if (!response.ok) return;
+      const data = await response.json();
+      setLatestEvents(data.events || []);
+      // Anchor the reconnect catch-up at the newest event we know about, so the
+      // first SSE open has a baseline and every later reconnect can ask the
+      // backend for anything created after it. ISO timestamps compare
+      // lexicographically, so max() over them is safe.
+      for (const e of data.events || []) {
+        if (e.created_at && (!lastLiveAtRef.current || e.created_at > lastLiveAtRef.current)) {
+          lastLiveAtRef.current = e.created_at;
+        }
+      }
+    } catch {
+      // A failure here must not blank the sidebar or throw; the panel simply
+      // falls back to the current page's events and says nothing false.
+    }
   };
+
+  const catchUpLive = useCallback(async () => {
+    // Reconnects must not disturb a search or a different view; the stream
+    // handler itself is gated identically. Catch-up is a best effort: any
+    // failure just leaves the next reconnect to retry.
+    if (searchActive || viewMode !== "standard") return;
+    const since = lastLiveAtRef.current;
+    if (!since) return;
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/api/v1/events/latest?limit=100&since=${encodeURIComponent(since)}`
+      );
+      if (!res.ok) return;
+      const data = await res.json();
+      const items: EventItem[] = data.events || [];
+      if (items.length === 0) return;
+      const fresh = items.filter((i) => !liveSeenRef.current.has(i.id));
+      if (fresh.length === 0) return;
+      for (const i of fresh) {
+        liveSeenRef.current.add(i.id);
+        if (i.created_at && i.created_at > (lastLiveAtRef.current ?? "")) {
+          lastLiveAtRef.current = i.created_at;
+        }
+      }
+      const { page, total } = liveStateRef.current;
+      if (page > 1) {
+        setLiveNewCount((c) => c + fresh.length);
+        return;
+      }
+      setEvents((prev) => {
+        const next = [...fresh, ...prev];
+        return next.length > 100 ? next.slice(0, 100) : next;
+      });
+      setLatestEvents((prev) => {
+        const next = [...fresh, ...prev];
+        return next.length > 8 ? next.slice(0, 8) : next;
+      });
+      const nextTotal = total + fresh.length;
+      liveStateRef.current.total = nextTotal;
+      setTotalEventsCount(nextTotal);
+      setTotalPages(Math.ceil(nextTotal / 5) || 1);
+    } catch {
+      // never crash the page on a catch-up hiccup
+    }
+  }, [viewMode, searchActive]);
 
   useEffect(() => {
     fetchEvents(1);
-  }, [viewMode]);
+  }, [viewMode, fetchEvents]);
+
+  useEffect(() => {
+    fetchLatest();
+  }, []);
+
+  // ── Real-time stream ──────────────────────────────────────────────────────
+  // SSE feed that announces events the moment a batch run marks them PROCESSED
+  // (backend /api/v1/events/stream). It is a live enhancement on top of the
+  // plain fetch feed: any failure drops the stream silently and the page
+  // behaves exactly as before. EventSource reconnects on its own.
+  const [liveConnected, setLiveConnected] = useState(false);
+  const [liveNewCount, setLiveNewCount] = useState(0);
+  // The message handler is attached once per (viewMode, searchActive) change,
+  // but pagination state moves independently. Mirror page/total through a ref
+  // so the handler reads current values instead of stale closure ones.
+  const liveStateRef = useRef({ page: currentPage, total: totalEventsCount });
+  useEffect(() => {
+    liveStateRef.current = { page: currentPage, total: totalEventsCount };
+  }, [currentPage, totalEventsCount]);
+  // Newest event timestamp seen so far, used as the ?since= anchor for the
+  // reconnect catch-up, and the set of event ids already merged live so a
+  // catch-up never duplicates an announcement the stream already delivered.
+  const lastLiveAtRef = useRef<string | null>(null);
+  const liveSeenRef = useRef<Set<string>>(new Set());
+  // The first `open` establishes the baseline; only later opens (real
+  // reconnects after a drop) should ask the server for anything missed.
+  const everOpenedRef = useRef(false);
+
+  useEffect(() => {
+    if (searchActive || viewMode !== "standard" || typeof EventSource === "undefined") {
+      return;
+    }
+    const source = new EventSource(`${API_BASE_URL}/api/v1/events/stream`);
+    source.onopen = () => {
+      setLiveConnected(true);
+      if (everOpenedRef.current) {
+        void catchUpLive();
+      }
+      everOpenedRef.current = true;
+    };
+    source.onerror = () => setLiveConnected(false);
+    source.addEventListener("new-event", (raw) => {
+      let item: EventItem;
+      try {
+        item = JSON.parse((raw as MessageEvent).data) as EventItem;
+      } catch {
+        return;
+      }
+      liveSeenRef.current.add(item.id);
+      if (item.created_at && item.created_at > (lastLiveAtRef.current ?? "")) {
+        lastLiveAtRef.current = item.created_at;
+      }
+      const { page, total } = liveStateRef.current;
+      if (page > 1) {
+        // Prepending into a later page would silently corrupt that page's
+        // scroll position; surface a "view latest" prompt instead.
+        setLiveNewCount((c) => c + 1);
+        return;
+      }
+      setEvents((prev) => {
+        if (prev.some((e) => e.id === item.id)) return prev;
+        const next = [item, ...prev];
+        return next.length > 100 ? next.slice(0, 100) : next;
+      });
+      setLatestEvents((prev) => {
+        if (prev.some((e) => e.id === item.id)) return prev;
+        const next = [item, ...prev];
+        return next.length > 8 ? next.slice(0, 8) : next;
+      });
+      const nextTotal = total + 1;
+      liveStateRef.current.total = nextTotal;
+      setTotalEventsCount(nextTotal);
+      setTotalPages(Math.ceil(nextTotal / 5) || 1);
+    });
+    return () => {
+      source.close();
+      setLiveConnected(false);
+    };
+  }, [viewMode, searchActive, catchUpLive]);
 
   const handleSearchResults = (results: EventItem[] | null) => {
     if (results === null) {
@@ -210,7 +365,10 @@ export default function HomePage() {
                 }
               },
               { label: 'Admin', href: '/admin/dashboard' },
-              { label: 'Fact Checker', href: '/fact-checker' }
+              { label: 'Fact Checker', href: '/fact-checker' },
+          { label: 'Sources', href: '/sources' },
+          { label: 'Lists', href: '/lists' },
+          { label: 'Settings', href: '/settings' }
             ]}
             activeHref={viewMode === "standard" ? "/?view=standard" : "/?view=map"}
             baseColor="#080c16"
@@ -328,7 +486,10 @@ export default function HomePage() {
               }
             },
             { label: 'Admin', href: '/admin/dashboard' },
-            { label: 'Fact Checker', href: '/fact-checker' }
+            { label: 'Fact Checker', href: '/fact-checker' },
+          { label: 'Sources', href: '/sources' },
+          { label: 'Lists', href: '/lists' },
+          { label: 'Settings', href: '/settings' }
           ]}
           activeHref={viewMode === "standard" ? "/?view=standard" : "/?view=map"}
           baseColor="#080c16"
@@ -419,9 +580,32 @@ export default function HomePage() {
         <div className="flex-grow w-full overflow-y-auto no-scrollbar flex flex-col bg-surface-container-lowest">
           <div className="flex-grow flex w-full max-w-container-max-width mx-auto relative px-margin-mobile md:px-margin-desktop py-stack-lg">
             
-            {/* Primary Feed Column */}
-            <main className="flex-grow w-full lg:w-3/4 pr-0 lg:pr-gutter pb-32 flex flex-col gap-stack-lg z-10">
-              
+{/* Primary Feed Column */}
+              <main className="flex-grow w-full lg:w-3/4 pr-0 lg:pr-gutter pb-32 flex flex-col gap-stack-lg z-10">
+
+              {/* Live stream status + pending live events. Hidden when the
+                  stream is disconnected AND nothing is pending, so an
+                  unavailable feed stays just as quiet as before. */}
+              {(liveConnected || liveNewCount > 0) && (
+                <div className="flex items-center gap-3">
+                  {liveConnected && (
+                    <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full border border-emerald-900/50 bg-emerald-950/40 text-emerald-400 text-[10px] font-bold uppercase tracking-wider">
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                      Live
+                    </span>
+                  )}
+                  {liveNewCount > 0 && (
+                    <button
+                      onClick={() => { setLiveNewCount(0); fetchEvents(1); }}
+                      className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-cyber-cyan/40 bg-cyber-cyan/10 text-cyber-cyan text-[11px] font-bold hover:bg-cyber-cyan/20 transition-colors"
+                    >
+                      <ArrowRight className="w-3.5 h-3.5" />
+                      {liveNewCount} new event{liveNewCount > 1 ? "s" : ""} · view latest
+                    </button>
+                  )}
+                </div>
+              )}
+
               {/* Topic Onboarding Widget */}
               <section className="glass-panel p-stack-md md:p-gutter rounded-lg relative overflow-hidden group border border-outline-variant/60">
                 <div className="absolute inset-0 bg-gradient-to-r from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
@@ -468,6 +652,11 @@ export default function HomePage() {
                         <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-950/40 border border-emerald-900/50 text-emerald-400 text-[10px] font-bold uppercase">
                           <span className="material-symbols-outlined text-[12px]">verified</span> Score: {priorityEvent.importance_score.toFixed(1)}
                         </span>
+                        <ContradictionBadge
+                          level={priorityEvent.contradiction_level}
+                          count={priorityEvent.contradiction_count}
+                          maxConfidence={priorityEvent.contradiction_max_confidence}
+                        />
                         <span className="font-mono-data text-mono-data text-on-surface-variant text-xs flex items-center gap-1">
                           <MapPin className="w-3.5 h-3.5 text-zinc-500" />
                           {priorityEvent.country || "Global"}
@@ -514,6 +703,11 @@ export default function HomePage() {
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-400 text-[10px] font-mono-data">
                           Score: {evt.importance_score.toFixed(1)}
                         </span>
+                        <ContradictionBadge
+                          level={evt.contradiction_level}
+                          count={evt.contradiction_count}
+                          maxConfidence={evt.contradiction_max_confidence}
+                        />
                         <span className={`inline-flex border px-2 py-0.5 rounded font-label-caps text-[9px] uppercase tracking-wider ${getTopicBadgeStyle(evt.topic)}`}>
                           {evt.topic}
                         </span>
@@ -585,7 +779,7 @@ export default function HomePage() {
                     Social Flux
                   </h2>
                   <button 
-                    onClick={() => fetchEvents(currentPage)}
+                    onClick={() => { fetchLatest(); fetchEvents(currentPage); }}
                     className="text-zinc-400 hover:text-primary transition-colors flex items-center text-[10px] font-bold tracking-wider uppercase gap-1"
                   >
                     <RefreshCw className="w-3 h-3 animate-spin-slow" />
@@ -595,33 +789,40 @@ export default function HomePage() {
               </div>
 
               {/* Feed items */}
-              <div className="flex-grow flex flex-col gap-3 overflow-y-auto pr-1 no-scrollbar">
-                <div className="p-3 bg-zinc-900/40 rounded border border-outline-variant/30 relative">
-                  <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-blue-500 rounded-l"></div>
-                  <div className="flex justify-between items-start mb-1 text-[9px] text-zinc-500 font-mono-data">
-                    <span>Reuters RSS Feed</span>
-                    <span>Just Now</span>
-                  </div>
-                  <p className="font-body-sm text-body-sm text-zinc-300 leading-snug">Energy ministry officials deny upcoming offshore drilling ban rumors, citing stable supply metrics.</p>
-                </div>
-                
-                <div className="p-3 bg-zinc-900/40 rounded border border-outline-variant/30 relative">
-                  <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-rose-500 rounded-l"></div>
-                  <div className="flex justify-between items-start mb-1 text-[9px] text-zinc-500 font-mono-data">
-                    <span>X \ @IntelWire</span>
-                    <span>4m ago</span>
-                  </div>
-                  <p className="font-body-sm text-body-sm text-zinc-300 leading-snug">Ambassadors in Brussels decline to comment on draft AI regulatory leaks circulating among ministers.</p>
-                </div>
+              {/*
+                This sidebar previously rendered three hard-coded "wire" items
+                attributed to Reuters RSS, an X account (@IntelWire) and
+                "Orbital Telemetry", each with a fabricated relative timestamp
+                ("Just Now", "4m ago"). Nothing was fetched, and attributing
+                invented headlines to real newsrooms is the most damaging kind of
+                fabrication this product could ship.
 
-                <div className="p-3 bg-zinc-900/40 rounded border border-outline-variant/30 relative">
-                  <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-amber-500 rounded-l"></div>
-                  <div className="flex justify-between items-start mb-1 text-[9px] text-zinc-500 font-mono-data">
-                    <span>Orbital Telemetry</span>
-                    <span>1h ago</span>
+                It now shows the genuinely most recent ingested events from the
+                API. When the real-time stream is connected, newly PROCESSED
+                events are prepended live here as the backend announces them.
+                Ingesting new articles still requires an administrator-triggered
+                sync from configured publisher RSS feeds; the live feed never
+                invents coverage.
+              */}
+              <div className="flex-grow flex flex-col gap-3 overflow-y-auto pr-1 no-scrollbar">
+                {(latestEvents.length > 0 ? latestEvents : events).slice(0, 6).map((e) => (
+                  <div key={e.id} className="p-3 bg-zinc-900/40 rounded border border-outline-variant/30 relative">
+                    <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-cyber-cyan rounded-l"></div>
+                    <div className="flex justify-between items-start mb-1 text-[9px] text-zinc-500 font-mono-data">
+                      <span>{e.country || "Global"}</span>
+                      <span>{e.topic || "WORLD"}</span>
+                    </div>
+                    <p className="font-body-sm text-body-sm text-zinc-300 leading-snug">{e.title}</p>
                   </div>
-                  <p className="font-body-sm text-body-sm text-zinc-300 leading-snug">Noticeable thermal anomalies detected over Northern Atlantic shipping channels, exceeding seasonal averages.</p>
-                </div>
+                ))}
+                {(latestEvents.length > 0 ? latestEvents : events).length === 0 && (
+                  <div className="p-3 bg-zinc-900/40 rounded border border-outline-variant/30">
+                    <p className="font-body-sm text-body-sm text-zinc-400 leading-snug">
+                      No events ingested yet. Articles arrive when an administrator
+                      triggers a sync from configured publisher RSS feeds.
+                    </p>
+                  </div>
+                )}
               </div>
             </aside>
           </div>
@@ -640,6 +841,7 @@ export default function HomePage() {
               <a className="text-on-surface-variant hover:text-primary transition-colors" href="#">Privacy Guidelines</a>
               <a className="text-on-surface-variant hover:text-primary transition-colors" href="#">System Ethics Policy</a>
               <a className="text-on-surface-variant hover:text-primary transition-colors" href="#">Uplink API Portal</a>
+              <a className="text-on-surface-variant hover:text-primary transition-colors" href="/settings">Settings</a>
             </nav>
           </footer>
         </div>
@@ -654,10 +856,6 @@ function renderDossierPanel(
   setSelectedEvent: React.Dispatch<React.SetStateAction<EventItem | null>>,
   getTopicBadgeStyle: (topic: string) => string
 ) {
-  const handleSubscribe = () => {
-    alert(`Clearance confirmed. Dispatch alerts configured for dossier: ${selectedEvent.title}`);
-  };
-
   return (
     <div className="fixed top-20 right-4 bottom-4 w-[calc(100%-2rem)] sm:w-[480px] z-40 bg-[#080c16]/95 backdrop-blur-2xl border border-indigo-500/20 rounded-2xl shadow-[0_0_50px_rgba(6,182,212,0.15)] p-6 flex flex-col justify-between overflow-y-auto no-scrollbar animate-fade-in-up">
       <div>
@@ -705,16 +903,22 @@ function renderDossierPanel(
           <div className="border-t border-indigo-950/40 pt-4">
             <h4 className="text-[10px] font-bold text-cyber-indigo/70 uppercase tracking-widest mb-3 font-mono-data">Geopolitical Bias Spectrum</h4>
             {(() => {
-              const lean = (selectedEvent.bias_lean || "CENTER").toUpperCase();
-              let percentage = 50;
-              let label = "CENTERED INTERPRETATION";
-              
+              // A null lean means the event was never classified. It must not be
+              // rendered as a centred interpretation, which is a real assessment
+              // we have not made. The marker is withheld instead.
+              const lean = (selectedEvent.bias_lean || "").toUpperCase();
+              let percentage: number | null = null;
+              let label = "NOT CLASSIFIED";
+
               if (lean === "LEFT") {
                 percentage = 10;
                 label = "LEFT IDEOLOGY LEAN";
               } else if (lean === "CENTER_LEFT") {
                 percentage = 30;
                 label = "CENTER-LEFT LEAN";
+              } else if (lean === "CENTER") {
+                percentage = 50;
+                label = "CENTERED INTERPRETATION";
               } else if (lean === "CENTER_RIGHT") {
                 percentage = 70;
                 label = "CENTER-RIGHT LEAN";
@@ -727,14 +931,16 @@ function renderDossierPanel(
                 <div className="space-y-2">
                   <div className="relative pt-2">
                     <div className="h-2.5 w-full rounded-full bg-gradient-to-r from-cyber-rose via-zinc-650 to-cyber-emerald border border-zinc-800/80"></div>
-                    <div 
-                      className="absolute top-0 flex flex-col items-center transition-all duration-500"
-                      style={{ left: `calc(${percentage}% - 6px)` }}
-                    >
-                      <div className="h-5 w-3 bg-white border border-slate-950 rounded shadow-[0_0_8px_rgba(255,255,255,0.4)] flex items-center justify-center">
-                        <div className="w-1.5 h-1.5 rounded-full bg-cyber-indigo"></div>
+                    {percentage !== null ? (
+                      <div
+                        className="absolute top-0 flex flex-col items-center transition-all duration-500"
+                        style={{ left: `calc(${percentage}% - 6px)` }}
+                      >
+                        <div className="h-5 w-3 bg-white border border-slate-950 rounded shadow-[0_0_8px_rgba(255,255,255,0.4)] flex items-center justify-center">
+                          <div className="w-1.5 h-1.5 rounded-full bg-cyber-indigo"></div>
+                        </div>
                       </div>
-                    </div>
+                    ) : null}
                   </div>
                   <div className="flex justify-between text-[9px] text-zinc-500 font-bold uppercase font-mono-data">
                     <span className="text-cyber-rose/80">Left Bias</span>
@@ -758,12 +964,6 @@ function renderDossierPanel(
               <h5 className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider mb-1 font-mono-data">Source Coverage</h5>
               <span className="text-white font-semibold">
                 {selectedEvent.source_count} publisher wireheads
-              </span>
-            </div>
-            <div>
-              <h5 className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider mb-1 font-mono-data">Confidence Score</h5>
-              <span className="text-cyber-emerald font-bold">
-                {(8.5 + (selectedEvent.importance_score % 1.5)).toFixed(1)}/10.0
               </span>
             </div>
             <div>

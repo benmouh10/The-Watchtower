@@ -38,6 +38,10 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# TypeScript incremental build cache. Regenerated on every `tsc`/`next build`
+# and was previously tracked, so each build produced spurious diff noise.
+*.tsbuildinfo
+
 # ── Docker ───────────────────────────────────────────────────────────────────
 # Keep docker-compose.yml tracked; ignore override
 docker-compose.override.yml

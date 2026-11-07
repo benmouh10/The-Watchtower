@@ -59,6 +59,7 @@ export default function FactCheckerPage() {
   const [history, setHistory] = useState<FactCheckResult[]>([]);
   const [userProfile, setUserProfile] = useState<any>(null);
   const [authError, setAuthError] = useState(false);
+const [submitError, setSubmitError] = useState<string | null>(null);
 
   // Authenticate user & load history
   useEffect(() => {
@@ -110,6 +111,7 @@ export default function FactCheckerPage() {
     if (!urlInput.trim()) return;
 
     setLoading(true);
+    setSubmitError(null);
     const token = localStorage.getItem("admin_token");
     
     try {
@@ -137,12 +139,20 @@ export default function FactCheckerPage() {
           }
         }
       } else {
+        // 422 means the page could not be read, 503 means the model is down.
+        // Neither is a crash, and the backend explains what to do instead, so
+        // it is shown inline rather than as a blocking alert.
         const errData = await response.json().catch(() => ({}));
-        alert(`Analysis failed: ${errData.detail || "Unknown error"}`);
+        setSubmitError(
+          errData.detail ||
+            (response.status === 422
+              ? "That page could not be read, so there was nothing to analyse. Paste the article text instead."
+              : `Analysis failed (HTTP ${response.status}).`)
+        );
       }
     } catch (err) {
       console.error("Analysis request failed", err);
-      alert("Failed to connect to the analysis pipeline.");
+      setSubmitError("Failed to connect to the analysis pipeline.");
     } finally {
       setLoading(false);
     }
@@ -242,6 +252,19 @@ export default function FactCheckerPage() {
                 )}
               </button>
             </form>
+            {submitError && (
+              <div className="mt-4 flex items-start gap-2 rounded-lg border border-amber-900/50 bg-amber-950/30 px-3 py-2.5">
+                <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-[11px] font-mono-data font-bold uppercase tracking-wider text-amber-400">
+                    No analysis produced
+                  </p>
+                  <p className="text-[12px] text-amber-200/80 leading-relaxed mt-1">
+                    {submitError}
+                  </p>
+                </div>
+              </div>
+            )}
           </section>
 
           {/* Radar Scanning HUD Sweep Overlay (Active during load) */}
@@ -386,7 +409,7 @@ export default function FactCheckerPage() {
                   <div className="space-y-3">
                     {currentReport.explanation.claims.map((claim, idx) => (
                       <div key={idx} className="bg-zinc-950/50 border border-zinc-850/60 rounded-xl p-3.5 flex flex-col gap-2 relative transition-all duration-300 hover:border-zinc-800/80">
-                        <p className="text-xs text-zinc-300 leading-relaxed italic">"{claim.text}"</p>
+                        <p className="text-xs text-zinc-300 leading-relaxed italic">&ldquo;{claim.text}&rdquo;</p>
                         <div className="flex items-center justify-between mt-1 pt-2 border-t border-zinc-900/60">
                           <span className="font-mono-data text-[9px] font-bold text-zinc-500 uppercase">Verification Status</span>
                           <span className={`inline-flex items-center gap-1.5 text-[9px] font-extrabold uppercase tracking-widest ${
@@ -514,25 +537,38 @@ export default function FactCheckerPage() {
           </div>
 
           <div className="flex-grow flex flex-col gap-3 overflow-y-auto pr-1 no-scrollbar">
-            <div className="p-3 bg-zinc-950/60 rounded-xl border border-indigo-950/40 relative hover:border-cyber-cyan/30 transition-all duration-300">
-              <div className="absolute left-0 top-0 bottom-0 w-1 bg-cyber-cyan rounded-l"></div>
+            {/*
+              This panel previously rendered two invented "wire" cards attributed
+              to Associated Press, claiming the pipeline was "fully connected"
+              and quoting a "verification latency" of 182ms. Neither number came
+              from anywhere, and attributing them to a real newsroom made a
+              fabrication look like a sourced report.
+
+              There is no real-time ingestion in this build (see feature 11: RSS
+              only, pulled on demand), so there is nothing truthful to stream
+              here. The panel now says so.
+            */}
+            <div className="p-3 bg-zinc-950/60 rounded-xl border border-indigo-950/40">
               <div className="flex justify-between items-start mb-1 text-[9px] text-zinc-500 font-mono-data">
-                <span>Associated Press</span>
-                <span>Just Now</span>
+                <span>Ingestion Status</span>
+                <span>Live query</span>
               </div>
               <p className="text-[11px] text-zinc-300 leading-relaxed">
-                Fact-checking pipeline fully connected. Core inference model listening.
+                No live wire is connected. This build ingests articles on demand
+                from configured publisher RSS feeds; it does not stream breaking
+                news.
               </p>
             </div>
-            
-            <div className="p-3 bg-zinc-950/60 rounded-xl border border-indigo-950/40 relative hover:border-cyber-cyan/30 transition-all duration-300">
-              <div className="absolute left-0 top-0 bottom-0 w-1 bg-emerald-500 rounded-l"></div>
+
+            <div className="p-3 bg-zinc-950/60 rounded-xl border border-indigo-950/40">
               <div className="flex justify-between items-start mb-1 text-[9px] text-zinc-500 font-mono-data">
-                <span>System Integrity</span>
-                <span>10m ago</span>
+                <span>External Fact-Checkers</span>
+                <span>Not connected</span>
               </div>
               <p className="text-[11px] text-zinc-300 leading-relaxed">
-                Verification logs synchronized. Verification latency evaluated at 182ms.
+                No third-party fact-checker feed is connected, so no
+                &quot;reviewed by&quot; badge is shown. Verdicts below come from
+                this system&apos;s own analysis and are labelled as such.
               </p>
             </div>
           </div>

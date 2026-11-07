@@ -107,19 +107,37 @@ All routes are under `/api/v1`. Implemented endpoints:
 
 | Area | Endpoints |
 |---|---|
-| Auth | `POST /auth/register` · `POST /auth/login` · `GET /auth/me` |
-| Events | `GET /events` · `GET /events/map` · `GET /events/{id}` |
+| Auth | `POST /auth/register` · `POST /auth/login` · `POST /auth/refresh` · `POST /auth/logout` · `GET /auth/me` |
+| Events | `GET /events` · `GET /events/trending` · `GET /events/latest` · `GET /events/map` · `GET /events/country/{c}` · `GET /events/topic/{t}` · `GET /events/{id}` · `GET /events/{id}/comparison` · `GET|POST|DELETE /events/{id}/follow` · `GET /events/{id}/fact-check` |
+| Sources | `GET /sources` · `GET /sources/bias-spectrum` |
 | Search | `GET /search/query` · `GET /search/autocomplete` |
+| Digests | `GET /digests` · `GET /digests/latest` · `GET /digests/{id}` · `GET /digests/{id}/html` |
+| Comments | `GET|POST /comments/events/{id}` · `PUT|DELETE /comments/{id}` · `POST|DELETE /comments/{id}/vote` |
+| Bookmarks | `GET|POST /bookmarks` · `GET|DELETE /bookmarks/events/{id}` |
+| Reading lists | `GET|POST /reading-lists` · `GET|DELETE /reading-lists/{id}` · `POST|DELETE /reading-lists/{id}/events` · `PUT /reading-lists/{id}/events/order` · `GET /reading-lists/{id}/export` |
 | Fact-check | `POST /fact-check` · `GET /fact-check/{id}` · `GET /fact-check/users/{id}` |
+| API keys | `POST /api-keys` · `GET /api-keys` · `GET /api-keys/self` · `DELETE /api-keys/{id}` |
+| Usage & billing | `GET /usage/me` · `GET /usage/summary` · `GET /billing/subscription` |
+| Newsletter | `GET /newsletter/config` · `GET /newsletter/status` · `POST|DELETE /newsletter/subscribe` · `POST /newsletter/unsubscribe` |
+| Push | `GET /push/config` · `GET|POST|DELETE /push/following/{topic}` · `POST|GET|DELETE /push/subscriptions` · `POST /push/test` |
 | Chatbot | `POST /chatbot` |
-| Pipeline | `POST /articles/sync` · `POST /admin/{embed,cluster,llm}/process` |
-| Admin | `GET /admin/stats` · `POST /admin/search/sync` |
+| Realtime | `GET /realtime/stream` (SSE) |
+| Articles | `GET|PUT /articles/{id}` · `GET /articles/{id}/audio` · `POST /articles/sync` |
+| Admin | `GET /admin/dashboard` · `GET|DELETE /admin/users` · `PUT /admin/users/{id}/{role,plan,block}` · `POST /admin/events/promote` · `POST /admin/sources` · `GET /admin/stats` · `GET /admin/moderation/*` · `POST /admin/{embed,cluster,llm}/process` · `POST /admin/search/sync` · `POST /admin/digest/generate` · `POST /admin/newsletter/deliver` · `GET /admin/newsletter/stats` · `POST /admin/push/deliver` |
 
-Auth is a JWT (HS256, 30 min) with four roles: `GUEST` → `AUTH_USER` → `JOURNALIST` → `ADMIN`.
+### Machine access
 
-> Several controllers still contain placeholder stubs (`/events/trending`, `/events/latest`,
-> `/comments/*`, `/auth/refresh`, and most of `/admin/*`). They return empty or hardcoded
-> payloads and are marked as such in the source.
+Auth for the web UI is a session JWT (HS256, 30 min) with four roles:
+`GUEST` → `AUTH_USER` → `JOURNALIST` → `ADMIN`.
+
+Long-lived `glb_` API keys (created under `/api-keys`, hashed at rest) let
+scripted consumers read the public surface. The otherwise-anonymous routes
+`/events`, `/sources`, `/digests` and `/search` accept a key without changing
+anonymous behavior; a key that *is* presented is scope-gated
+(`read:events`, `read:sources`, …) and every key-authenticated read is recorded
+against the owner's `api_request` usage meter (visible under `/usage/me`).
+Rate limits and plan quotas are off unless `ENFORCE_RATE_LIMITS` /
+`ENFORCE_PLAN_QUOTAS` are enabled in `.env`.
 
 ## Security status
 

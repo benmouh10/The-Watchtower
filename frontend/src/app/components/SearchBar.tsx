@@ -4,14 +4,20 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Search, X, TrendingUp, Globe, ShieldAlert } from "lucide-react";
 
 interface SearchBarProps {
-  onSelectEvent: (event: any) => void;
-  onSearchResults: (results: any[] | null) => void;
-  onClearSearch: () => void;
+  onSelectEvent?: (event: any) => void;
+  onSearchResults?: (results: any[] | null) => void;
+  onClearSearch?: () => void;
+  // When provided, Enter / the ANALYZE button delegate execution to the caller
+  // (e.g. navigation to a dedicated /search results page) instead of fetching
+  // here and flying to the first hit. Homepage behaviour is unchanged because
+  // it does not pass either optional handler.
+  onSubmit?: (query: string) => void;
+  onSuggestionSelect?: (event: any) => void;
 }
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-export default function SearchBar({ onSelectEvent, onSearchResults, onClearSearch }: SearchBarProps) {
+export default function SearchBar({ onSelectEvent, onSearchResults, onClearSearch, onSubmit, onSuggestionSelect }: SearchBarProps) {
   const [query, setQuery] = useState("");
   const [suggestions, setSuggestions] = useState<any[]>([]);
   const [showDropdown, setShowDropdown] = useState(false);
@@ -57,6 +63,10 @@ export default function SearchBar({ onSelectEvent, onSearchResults, onClearSearc
   // Execute full-text query
   const handleSearch = useCallback(async (searchQuery: string) => {
     if (!searchQuery.trim()) return;
+    if (onSubmit) {
+      onSubmit(searchQuery);
+      return;
+    }
     setLoading(true);
     setShowDropdown(false);
     try {
@@ -65,27 +75,31 @@ export default function SearchBar({ onSelectEvent, onSearchResults, onClearSearc
       );
       if (response.ok) {
         const data = await response.json();
-        onSearchResults(data);
+        onSearchResults?.(data);
         if (data && data.length > 0) {
           // If search yielded results, fly to the first matching event
-          onSelectEvent(data[0]);
+          onSelectEvent?.(data[0]);
         }
       } else {
-        onSearchResults([]);
+        onSearchResults?.([]);
       }
     } catch (err) {
       console.error("Search query failed", err);
-      onSearchResults([]);
+      onSearchResults?.([]);
     } finally {
       setLoading(false);
     }
-  }, [onSearchResults, onSelectEvent]);
+  }, [onSearchResults, onSelectEvent, onSubmit]);
 
   const handleSuggestionClick = (event: any) => {
     setQuery(event.title);
     setShowDropdown(false);
-    onSelectEvent(event);
-    onSearchResults([event]);
+    if (onSuggestionSelect) {
+      onSuggestionSelect(event);
+      return;
+    }
+    onSelectEvent?.(event);
+    onSearchResults?.([event]);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -98,7 +112,7 @@ export default function SearchBar({ onSelectEvent, onSearchResults, onClearSearc
     setQuery("");
     setSuggestions([]);
     setShowDropdown(false);
-    onClearSearch();
+    onClearSearch?.();
   };
 
   return (

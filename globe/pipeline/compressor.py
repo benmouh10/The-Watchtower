@@ -34,6 +34,16 @@ ATTRIBUTION_VERBS = {
 }
 NUMBER_PATTERN = re.compile(r'\b\d[\d,.]+%?\b')
 
+# Words that invert the polarity of a claim. When BOTH sides of a pair use
+# them (e.g. outlet A "denied X", outlet B "disputed X") the pair disagrees in
+# framing rather than merely paraphrasing — the signal behind negation_conflict.
+NEGATION_WORDS = {
+    "not", "no", "never", "deny", "denied", "denies",
+    "reject", "rejected", "rejects", "refuse", "refused", "refuses",
+    "false", "untrue", "contrary", "dispute", "disputed", "disputes",
+    "contradicts", "contradicted", "denial", "falsehood",
+}
+
 
 class Compressor:
     """
@@ -373,9 +383,32 @@ class Compressor:
                         fact.short_post_confirmations.append(mappings[j].outlet)
 
                 elif sim >= 0.60 and mappings[j].outlet != mappings[i].outlet:
-                    # Moderate similarity from different outlet → potential contradiction
-                    # Check if the sentiment/framing differs significantly
-                    pass  # TODO: implement contradiction detection
+                    # Moderate similarity from different outlet → potential
+                    # contradiction. The pair is below the merge threshold so
+                    # it is NOT deduplicated: both sentences survive, and the
+                    # disagreement is flagged here as a structured A-vs-B pair.
+                    # The later detect_contradictions() pass sees mapping j as
+                    # its own fact and — because this fact already lists
+                    # mappings[j].outlet — only appends the reverse pair, so
+                    # every disagreement is reported exactly once.
+                    nature = self._conflict_nature(texts[i], texts[j])
+                    if nature:
+                        fact.contradicted_by.append({
+                            "type": "contradiction",
+                            "claim_a": {
+                                "text": texts[i],
+                                "source": mappings[i].outlet,
+                            },
+                            "claim_b": {
+                                "text": texts[j],
+                                "source": mappings[j].outlet,
+                            },
+                            "nature": nature,
+                        })
+                        logger.info(
+                            f"Contradiction ({nature}) flagged at dedup between "
+                            f"'{mappings[i].outlet}' and '{mappings[j].outlet}'"
+                        )
 
             fact.confirmation_count = len(set(fact.confirmed_by))
             if fact.confirmation_count == 1:
@@ -585,6 +618,25 @@ class Compressor:
                 )
 
         return facts
+
+    @staticmethod
+    def _conflict_nature(text_a: str, text_b: str) -> str | None:
+        """
+        Classify a moderate-similarity cross-outlet pair as a contradiction.
+
+        Returns "numeric_conflict" when the first numbers diverge by >50%,
+        "negation_conflict" when both sides use inversion language, otherwise
+        None (no disagreement — the pair is just similar reporting).
+        """
+        if Compressor._has_opposing_numbers(text_a, text_b):
+            return "numeric_conflict"
+        lowered_a = text_a.lower().split()
+        lowered_b = text_b.lower().split()
+        neg_a = any(word in NEGATION_WORDS for word in lowered_a)
+        neg_b = any(word in NEGATION_WORDS for word in lowered_b)
+        if neg_a and neg_b:
+            return "negation_conflict"
+        return None
 
     @staticmethod
     def _has_opposing_numbers(text_a: str, text_b: str) -> bool:
