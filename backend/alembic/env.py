@@ -27,14 +27,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Application Imports
 # ─────────────────────────────────────────────────────────────────────────────
 # Import settings BEFORE models so DATABASE_URL is resolved first.
-from app.core.config import settings  # noqa: E402
+from src.core.config import settings  # noqa: E402
 
 # Import ALL entity models so that Base.metadata contains every table.
 # Even if a model is not directly used here, it must be imported to register
 # its table with the metadata registry.
-from app.entities.models import Base  # noqa: E402  # registers all tables
+from src.data.entities.models import Base  # noqa: E402  # registers all tables
 # Explicit imports ensure models are in-scope (avoids "no changes" autogenerate)
-import app.entities.models  # noqa: F401, E402
+import src.data.entities.models  # noqa: F401, E402
 
 # Register pgvector's custom type with SQLAlchemy's type registry so Alembic
 # can handle Vector columns without raising CompileError.

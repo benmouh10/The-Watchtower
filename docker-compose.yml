@@ -138,7 +138,8 @@ services:
     restart: unless-stopped
     # Mount source code for hot-reload (uvicorn --reload watches this)
     volumes:
-      - ./backend/app:/app/app:delegated
+      - ./backend/src:/app/src:delegated
+      - ./backend/models:/app/models:delegated
       - ./backend/alembic.ini:/app/alembic.ini
       - ./backend/alembic:/app/alembic
     ports:
@@ -146,7 +147,12 @@ services:
     environment:
       # ── Application ──
       APP_ENV: ${APP_ENV:-development}
-      SECRET_KEY: ${SECRET_KEY:-super_secret_dev_key_change_in_production}
+      # No default is supplied on purpose. An empty or known default would be a
+      # publishable signing key: JWT signing is symmetric, so anyone holding this
+      # value could mint a valid access token for any user, including an admin
+      # role. app/core/config.py also refuses to start when APP_ENV=production
+      # and this is still a placeholder.
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in .env - see .env.example}
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
       ALGORITHM: ${ALGORITHM:-HS256}
 

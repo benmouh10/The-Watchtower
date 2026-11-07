@@ -1,6 +1,18 @@
 # =============================================================================
 # GlobeLens AI — Backend Python Dependencies
 # =============================================================================
+# Supported interpreters: Python 3.12 (backend/Dockerfile) and 3.13 (local dev).
+#
+# The ten pins below marked "3.13" could not build on Python 3.13: most shipped
+# no cp313 wheel, so pip fell back to a source build that failed (psycopg2-binary
+# wanted pg_config). Three needed more than a wheel bump:
+#   sqlalchemy 2.0.30 dies on import under 3.13 (canonical symbol __firstlineno__)
+#   playwright 1.44.0 hard-pins greenlet==3.0.3, which has no cp313 build
+#   feedparser 6.0.11 requires sdist-only, py2-era sgmllib3k
+# They are now set to versions exercised by the test suite and a 52-assertion live
+# run against PostgreSQL. The full 131-wheel closure also resolves for cp312 linux,
+# so the 3.12 image is unaffected. numpy 2.5.3 requires Python >= 3.12.
+# =============================================================================
 
 # ── Web Framework ─────────────────────────────────────────────────────────────
 fastapi==0.111.0
@@ -8,11 +20,11 @@ uvicorn[standard]==0.29.0
 gunicorn==22.0.0
 
 # ── Database (PostgreSQL + pgvector) ─────────────────────────────────────────
-sqlalchemy[asyncio]==2.0.30
-asyncpg==0.29.0
+sqlalchemy[asyncio]==2.0.36  # 3.13 (2.0.30 dies on import: canonical symbol __firstlineno__)
+asyncpg==0.31.0  # 3.13 wheel
 alembic==1.13.1
 pgvector==0.2.5
-psycopg2-binary==2.9.9
+psycopg2-binary==2.9.13  # 3.13 wheel
 
 # ── Redis Cache ───────────────────────────────────────────────────────────────
 redis[hiredis]==5.0.4
@@ -24,24 +36,27 @@ elasticsearch[async]==8.13.1
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 python-multipart==0.0.9
-playwright==1.44.0
+playwright==1.63.0  # 3.13 wheel (1.44.0 hard-pins greenlet==3.0.3, no cp313 build)
 
 
 # ── LLM Providers ────────────────────────────────────────────────────────────
 anthropic==0.28.0
 openai==1.30.1
-tiktoken==0.7.0
+tiktoken==0.14.0  # 3.13 wheel
 google-generativeai==0.5.4
 
 # ── HTTP & Web Scraping ───────────────────────────────────────────────────────
 httpx==0.27.0
-aiohttp==3.9.5
+aiohttp==3.14.3  # 3.13 wheel
 beautifulsoup4==4.12.3
-feedparser==6.0.11
-lxml==5.2.2
+feedparser==6.0.14  # 3.13 (6.0.11 needs sdist-only, py2-era sgmllib3k)
+lxml==6.1.3  # 3.13 wheel
+
+# ── Video path (roadmap #10) ──────────────────────────────────────────────────
+youtube-transcript-api==1.0.2
 
 # ── Data Validation ───────────────────────────────────────────────────────────
-pydantic==2.7.1
+pydantic==2.13.5  # 3.13 wheel (pydantic-core 2.7.1 had no cp313 build)
 pydantic-settings==2.2.1
 email-validator==2.1.1
 
@@ -53,9 +68,11 @@ flower==2.0.1
 python-dotenv==1.0.1
 tenacity==8.3.0
 structlog==24.1.0
-numpy==1.26.4
+numpy==2.5.3  # 3.13 wheel
+
+# ── Payments ──────────────────────────────────────────────────────────────────
+stripe==11.0.0
 
 # ── Testing ───────────────────────────────────────────────────────────────────
 pytest==8.2.0
 pytest-asyncio==0.23.7
-httpx==0.27.0
