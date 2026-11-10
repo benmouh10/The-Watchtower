@@ -197,7 +197,7 @@ async def test_failed_delivery_retries_then_fails(monkeypatch, client, auth):
     async with AsyncSessionFactory() as db:
         event = await _make_event(db)
         service = WebhookService(db)
-        await service.queue_for_event(event)
+        await service.queue_for_event(event, now=base)
         now = base
         for _ in range(settings.WEBHOOK_DELIVERY_MAX_ATTEMPTS - 1):
             counts = await service.flush_pending_deliveries(now=now + timedelta(seconds=1))

@@ -11,7 +11,7 @@ import pytest
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
-BASE = datetime(2026, 9, 30, 8, 0, 0, tzinfo=timezone.utc)
+BASE = datetime.now(timezone.utc) - timedelta(hours=1)
 
 
 async def _make_event(db, *, topic="TECH", bias=None):
